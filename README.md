@@ -4,6 +4,11 @@ Web migration of the original Whop Toolkit CLI. See `docs/MIGRATION_PLAN.md`
 for the full architecture rationale and module mapping, and
 `docs/legacy_cli_docs/` for the complete original CLI, preserved as-is.
 
+**Status, bugs, and prioritized fixes:** always read  
+→ **`docs/REVIEW_AND_ROADMAP.md`**  
+before changing code or handing work to another AI. That file is the short
+handoff doc so prompts stay small.
+
 ## Quick Start (local dev)
 
 **Backend:**
@@ -25,6 +30,8 @@ npm run dev
 Visit `http://localhost:3000`, click "Sign in with Whop" (wire this up to
 `GET /api/auth/whop` in your login page), and you're in.
 
+> Set `DEV_SKIP_AUTH=true` in `.env.local` to skip Whop login while testing UI/backend locally. Never enable that in production.
+
 ## Deploying
 
 - **Frontend** → Vercel or Cloudflare Pages. Set the env vars from
@@ -33,27 +40,23 @@ Visit `http://localhost:3000`, click "Sign in with Whop" (wire this up to
 - **Backend** → Render or Railway, using `backend/Dockerfile` directly.
   Both platforms auto-detect a Dockerfile and inject `$PORT`.
 
+## Docs map
+
+| Doc | What it’s for |
+|-----|----------------|
+| `docs/REVIEW_AND_ROADMAP.md` | **Start here** — known bugs, P0–P3 priorities, env checklist |
+| `docs/MIGRATION_PLAN.md` | CLI → web module mapping and why the backend is separate |
+| `docs/DIRECTORY_STRUCTURE.md` | Folder layout |
+| `docs/legacy_cli_docs/` | Original CLI architecture, guides, and frozen source |
+
 ## What's Still a Stub vs. Production-Ready
 
-Being direct about this so nothing here gets deployed with false confidence:
+Being direct so nothing gets deployed with false confidence. Full detail and
+fix order live in `docs/REVIEW_AND_ROADMAP.md`.
 
-- **`app/routes/clips.py`'s `FileResponse`** streams the finished clip
-  straight from the container's local disk. That's fine for local dev, but
-  on Render/Railway your container's filesystem is ephemeral and requests
-  may hit different container instances — for real production traffic,
-  swap this for an upload to S3-compatible object storage and return a
-  signed URL instead (there's a comment marking exactly where in the file).
-- **CORS in `backend/app/main.py`** is wide open (`allow_origins=["*"]`) for
-  local dev convenience. Lock it to `FRONTEND_ORIGIN` before deploying
-  publicly.
-- **No rate limiting or per-user quota enforcement** yet on either the
-  clip-extraction or Gemini-analysis routes — both are real costs (compute
-  time, API spend) that a public-facing tool needs guardrails on before
-  launch. Not built here since it depends on your actual pricing/plan
-  model, which wasn't specified.
-- **No database yet.** `core/activity_log.py` and `core/project.py`'s
-  video-ID-based dedup (see MIGRATION_PLAN.md) both assume a `projects` /
-  `activity_log` table exists, keyed by the Whop user's `sub`. Schema and
-  an ORM layer (Prisma/Drizzle for the Next.js side, or a shared Postgres
-  the backend also reads) aren't included here — worth doing before any
-  "recent projects" or per-user history feature is built on the frontend.
+- **`backend/app/routes/clips.py` `FileResponse`** — streams from container disk (local-dev only). Production needs S3-compatible storage + signed URL.
+- **CORS** — still wide open (`*`) until locked to `FRONTEND_ORIGIN` (see roadmap B5).
+- **No backend-side auth** — frontend checks Whop session; FastAPI itself is open if the URL is known (roadmap B6).
+- **No rate limiting / quotas** — clip extraction and Gemini both cost money/compute.
+- **No database** — no per-user projects or activity history yet.
+- **Repo hygiene** — add/respect `.gitignore`; do not commit `.next`, `__pycache__`, or real `.env` files.
