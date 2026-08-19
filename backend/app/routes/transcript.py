@@ -95,7 +95,7 @@ def get_transcript(req: TranscriptRequest):
     from app.routes.metadata import get_metadata
     info = get_metadata(req.url)
 
-  if info.get("video_id") and ("youtube.com" in req.url or "youtu.be" in req.url):
+    if info.get("video_id") and ("youtube.com" in req.url or "youtu.be" in req.url):
         captions = _fetch_youtube_captions(info["video_id"])
         if captions:
             return captions
