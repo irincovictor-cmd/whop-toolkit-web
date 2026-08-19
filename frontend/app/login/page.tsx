@@ -13,29 +13,41 @@ export default async function LoginPage({
   const message = error ? (ERROR_MESSAGES[error] ?? decodeURIComponent(error)) : null;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-8 text-center">
-      <h1 className="text-4xl font-bold tracking-tight mb-4">Whop Toolkit</h1>
-      <p className="text-lg text-gray-600 mb-8 max-w-md">
-        Sign in with your Whop account to extract video clips and analyze transcripts with Gemini AI.
-      </p>
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(115,89,250,0.18),_transparent_55%)]" />
 
-      {message && (
-        <p className="mb-6 max-w-md rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {message}
+      <div className="relative w-full max-w-md rounded-2xl border border-ink-border bg-ink-surface p-8 shadow-glow">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-accent" />
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight text-mist">Whop Toolkit</h1>
+            <p className="text-xs text-mist-muted">Creator clip &amp; transcript workspace</p>
+          </div>
+        </div>
+
+        <p className="mb-6 text-sm leading-relaxed text-mist-muted">
+          Sign in with Whop to fetch videos, cut clips, pull transcripts, and run Gemini analysis —
+          without keeping a permanent media library.
         </p>
-      )}
 
-      <a
-        href="/api/auth/whop"
-        className="px-6 py-3 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
-      >
-        Sign in with Whop
-      </a>
+        {message && (
+          <p className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {message}
+          </p>
+        )}
 
-      <p className="mt-8 text-sm text-gray-500 max-w-md">
-        Local dev requires real Whop app credentials in{" "}
-        <code className="rounded bg-gray-100 px-1">frontend/.env.local</code>. See the README for setup.
-      </p>
+        <a
+          href="/api/auth/whop"
+          className="flex w-full items-center justify-center rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white transition hover:bg-accent-hover"
+        >
+          Sign in with Whop
+        </a>
+
+        <p className="mt-6 text-center text-xs text-mist-muted">
+          Local dev: set <code className="rounded bg-ink-raised px-1">DEV_SKIP_AUTH=true</code> in{" "}
+          <code className="rounded bg-ink-raised px-1">.env.local</code> to skip OAuth.
+        </p>
+      </div>
     </main>
   );
 }

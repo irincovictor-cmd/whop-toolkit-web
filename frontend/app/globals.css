@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  @apply bg-ink text-mist antialiased font-sans;
+}
+
+/* Thin scrollbar for dark panels */
+.scroll-dark::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scroll-dark::-webkit-scrollbar-thumb {
+  background: #2e2e38;
+  border-radius: 999px;
 }
