@@ -1,8 +1,10 @@
 """
-Shared yt-dlp configuration, ported from the CLI's modules/metadata.py.
+Shared yt-dlp configuration.
 
-YouTube often 403s datacenter/old clients (e.g. ANDROID_VR). Prefer
-mweb/tv/web-style clients and keep yt-dlp updated.
+YouTube SABR experiments often 403 high-quality DASH (bestvideo+bestaudio)
+while progressive formats (e.g. format 18) still work with android+web.
+Validated locally 2026-08: android,web + progressive/fallback succeeded
+where default/android + 401+251 failed mid-download with 403.
 """
 
 from urllib.parse import urlparse
@@ -12,9 +14,16 @@ BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-# Order matters: yt-dlp tries clients until formats resolve.
-# Avoid android_vr / broken defaults that currently 403 on many IPs.
-YOUTUBE_PLAYER_CLIENTS = ["mweb", "tv", "web", "web_embedded"]
+# Prefer android+web: avoids ANDROID_VR defaults and matched a successful
+# full download when mweb/tv reported DRM-only / missing formats.
+YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
+
+# Prefer a single progressive stream when possible (SABR-safe), then DASH.
+YOUTUBE_FORMAT_VIDEO = (
+    "best[height<=1080][protocol^=http]/best[height<=720]/"
+    "bestvideo[height<=1080]+bestaudio/best"
+)
+YOUTUBE_FORMAT_AUDIO = "bestaudio/best"
 
 
 def detect_platform(url: str) -> str:
@@ -51,3 +60,11 @@ def build_ydl_options(url: str, **extra) -> dict:
         }
     options.update(extra)
     return options
+
+
+def format_selector(url: str, want_audio_only: bool = False) -> str:
+    if want_audio_only:
+        return YOUTUBE_FORMAT_AUDIO if detect_platform(url) == "youtube" else "bestaudio/best"
+    if detect_platform(url) == "youtube":
+        return YOUTUBE_FORMAT_VIDEO
+    return "bestvideo[height<=1080]+bestaudio/best"

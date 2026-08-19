@@ -1,14 +1,9 @@
 """
 POST /clips/extract
 
-Web successor to modules/downloader.py:stream_crop_clip(). The CLI version
-resolved a raw CDN URL and fed it to ffmpeg with -ss/-to before -i. On the
-web, we let yt-dlp do the range-limited fetch itself via --download-sections
-instead -- more robust across the wider variety of source platforms a
-public tool will actually see (TikTok/Instagram/Vimeo/etc, not just
-YouTube), since yt-dlp's own section-download logic already knows how to
-handle each site's quirks. Either way, the goal from the CLI carries over
-unchanged: never pull the full source video for a short clip.
+Uses yt-dlp --download-sections for range fetches. YouTube format/clients
+come from app.core.ytdlp_client (android+web, progressive-first) after
+SABR 403 issues with bestvideo+bestaudio only.
 """
 
 import subprocess
@@ -21,11 +16,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.core.local_output import save_to_local_output
-from app.core.ytdlp_client import build_ydl_options
+from app.core.ytdlp_client import build_ydl_options, format_selector
 
 router = APIRouter()
 
-MAX_CLIP_SECONDS = 600  # sanity cap; adjust per your product's actual limits
+MAX_CLIP_SECONDS = 600
 
 
 class ClipRequest(BaseModel):
@@ -53,18 +48,21 @@ def extract_clip(req: ClipRequest):
     output_template = str(work_dir / f"{output_id}.%(ext)s")
 
     section = f"*{_seconds_to_timestamp(req.start)}-{_seconds_to_timestamp(req.end)}"
+    fmt = format_selector(req.url, want_audio_only=(req.format != "mp4"))
+    options = build_ydl_options(req.url)
 
+    # URL must be last. Options after the URL are easy to get wrong.
     cmd = [
         "yt-dlp",
         "--download-sections", section,
         "--force-keyframes-at-cuts",
-        "-f", "bestvideo[height<=1080]+bestaudio/best" if req.format == "mp4" else "bestaudio",
+        "-f", fmt,
         "--merge-output-format", "mp4",
         "-o", output_template,
-        req.url,
+        "--user-agent", options["http_headers"]["User-Agent"],
     ]
-
-    options = build_ydl_options(req.url)
+    if options["http_headers"].get("Referer"):
+        cmd += ["--referer", options["http_headers"]["Referer"]]
     if "extractor_args" in options:
         clients = options["extractor_args"].get("youtube", {}).get("player_client", [])
         if clients:
@@ -72,9 +70,7 @@ def extract_clip(req: ClipRequest):
                 "--extractor-args",
                 f"youtube:player_client={','.join(clients)}",
             ]
-    cmd += ["--user-agent", options["http_headers"]["User-Agent"]]
-    if options["http_headers"].get("Referer"):
-        cmd += ["--referer", options["http_headers"]["Referer"]]
+    cmd.append(req.url)
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
@@ -95,7 +91,6 @@ def extract_clip(req: ClipRequest):
     else:
         final_path = source_file
 
-    # Local testing: also save under LOCAL_OUTPUT_DIR (see backend/.env)
     nice_name = (
         f"clip_{_seconds_to_timestamp(req.start).replace(':', '-')}"
         f"_to_{_seconds_to_timestamp(req.end).replace(':', '-')}"
@@ -104,7 +99,6 @@ def extract_clip(req: ClipRequest):
     saved = save_to_local_output(final_path, preferred_name=nice_name)
     download_name = saved.name if saved else nice_name
 
-    # Still stream to the browser so the UI download button works.
     return FileResponse(
         path=str(final_path),
         filename=download_name,
