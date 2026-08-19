@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app.core.local_output import save_to_local_output
 from app.core.ytdlp_client import build_ydl_options
 
 router = APIRouter()
@@ -53,10 +54,6 @@ def extract_clip(req: ClipRequest):
 
     section = f"*{_seconds_to_timestamp(req.start)}-{_seconds_to_timestamp(req.end)}"
 
-    # yt-dlp's own section-download feature -- this is what avoids
-    # downloading the full source video, the same goal the CLI's dual
-    # -ss/-to-before-input ffmpeg trick served, just via yt-dlp's native
-    # mechanism instead of resolving raw stream URLs ourselves.
     cmd = [
         "yt-dlp",
         "--download-sections", section,
@@ -69,10 +66,12 @@ def extract_clip(req: ClipRequest):
 
     options = build_ydl_options(req.url)
     if "extractor_args" in options:
-        for client in options["extractor_args"].get("youtube", {}).get("player_client", []):
-            pass  # translated into --extractor-args below
-        import json
-        cmd += ["--extractor-args", f"youtube:player_client={','.join(options['extractor_args']['youtube']['player_client'])}"]
+        clients = options["extractor_args"].get("youtube", {}).get("player_client", [])
+        if clients:
+            cmd += [
+                "--extractor-args",
+                f"youtube:player_client={','.join(clients)}",
+            ]
     cmd += ["--user-agent", options["http_headers"]["User-Agent"]]
     if options["http_headers"].get("Referer"):
         cmd += ["--referer", options["http_headers"]["Referer"]]
@@ -86,8 +85,6 @@ def extract_clip(req: ClipRequest):
         raise HTTPException(status_code=500, detail="Clip extraction produced no output file")
     source_file = downloaded[0]
 
-    # Format conversion (mp3/wav extraction) -- same ffmpeg recipes as the
-    # CLI's modules/converter.py, unchanged, since those were already correct.
     if req.format in ("mp3", "wav"):
         final_path = work_dir / f"{output_id}.{req.format}"
         codec = ["-acodec", "libmp3lame", "-q:a", "2"] if req.format == "mp3" else ["-acodec", "pcm_s16le"]
@@ -98,11 +95,18 @@ def extract_clip(req: ClipRequest):
     else:
         final_path = source_file
 
-    # In production, upload final_path to S3-compatible object storage here
-    # and return a signed URL instead of streaming the file through the
-    # API process -- FileResponse below is the simple/local-dev path.
+    # Local testing: also save under LOCAL_OUTPUT_DIR (see backend/.env)
+    nice_name = (
+        f"clip_{_seconds_to_timestamp(req.start).replace(':', '-')}"
+        f"_to_{_seconds_to_timestamp(req.end).replace(':', '-')}"
+        f"_{output_id}.{req.format if req.format in ('mp3', 'wav') else final_path.suffix.lstrip('.') or 'mp4'}"
+    )
+    saved = save_to_local_output(final_path, preferred_name=nice_name)
+    download_name = saved.name if saved else nice_name
+
+    # Still stream to the browser so the UI download button works.
     return FileResponse(
         path=str(final_path),
-        filename=final_path.name,
+        filename=download_name,
         media_type="application/octet-stream",
     )
