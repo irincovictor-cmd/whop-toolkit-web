@@ -1,1 +1,5 @@
-{}
+{
+  "/api/metadata/route": "app/api/metadata/route.js",
+  "/api/clips/route": "app/api/clips/route.js",
+  "/dashboard/page": "app/dashboard/page.js"
+}
