@@ -1,10 +1,11 @@
 """
 Shared yt-dlp configuration.
 
-YouTube SABR experiments often 403 high-quality DASH (bestvideo+bestaudio)
-while progressive formats (e.g. format 18) still work with android+web.
-Validated locally 2026-08: android,web + progressive/fallback succeeded
-where default/android + 401+251 failed mid-download with 403.
+YouTube (2025–2026) often 403s high DASH (bestvideo+bestaudio) under SABR /
+PO-token experiments, while progressive muxed formats still work.
+
+Strategy: callers should try FORMAT_VIDEO_HQ first, then FORMAT_VIDEO_SAFE.
+Clients: android+web matched successful local downloads on this project.
 """
 
 from urllib.parse import urlparse
@@ -14,16 +15,15 @@ BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-# Prefer android+web: avoids ANDROID_VR defaults and matched a successful
-# full download when mweb/tv reported DRM-only / missing formats.
 YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
 
-# Prefer a single progressive stream when possible (SABR-safe), then DASH.
-YOUTUBE_FORMAT_VIDEO = (
-    "best[height<=1080][protocol^=http]/best[height<=720]/"
-    "bestvideo[height<=1080]+bestaudio/best"
+# Attempt first: real 720/1080 when YouTube allows DASH.
+FORMAT_VIDEO_HQ = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+# Fallback: progressive / SABR-safe (often ~360p–720p, but completes).
+FORMAT_VIDEO_SAFE = (
+    "best[height<=720][ext=mp4]/best[height<=480]/best[protocol^=http]/best"
 )
-YOUTUBE_FORMAT_AUDIO = "bestaudio/best"
+FORMAT_AUDIO = "bestaudio/best"
 
 
 def detect_platform(url: str) -> str:
@@ -62,9 +62,15 @@ def build_ydl_options(url: str, **extra) -> dict:
     return options
 
 
-def format_selector(url: str, want_audio_only: bool = False) -> str:
+def format_attempts(url: str, want_audio_only: bool = False) -> list[str]:
+    """Ordered format strings to try until one succeeds."""
     if want_audio_only:
-        return YOUTUBE_FORMAT_AUDIO if detect_platform(url) == "youtube" else "bestaudio/best"
+        return [FORMAT_AUDIO]
     if detect_platform(url) == "youtube":
-        return YOUTUBE_FORMAT_VIDEO
-    return "bestvideo[height<=1080]+bestaudio/best"
+        return [FORMAT_VIDEO_HQ, FORMAT_VIDEO_SAFE]
+    return ["bestvideo[height<=1080]+bestaudio/best", "best"]
+
+
+def format_selector(url: str, want_audio_only: bool = False) -> str:
+    """Single format string (first preference). Prefer format_attempts for resilience."""
+    return format_attempts(url, want_audio_only)[0]
