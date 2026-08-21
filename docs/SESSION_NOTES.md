@@ -105,6 +105,178 @@ Successful clips are **also copied** into `LOCAL_OUTPUT_DIR` via `app/core/local
 
 ---
 
+## Test log / errors seen (Aug 2026 local session)
+
+Chronological diary of failures and what fixed them. Use this when the same symptoms come back.
+
+### T1 — Backend will not start (IndentationError)
+
+**Where:** `uvicorn app.main:app --reload --port 8000`  
+**Symptom:** Process starts reloader, then crashes on import.
+
+```text
+File "...\backend\app\routes\transcript.py", line 98
+    if info.get("video_id") and ("youtube.com" in req.url or "youtu.be" in req.url):
+                                                                                    ^
+IndentationError: unindent does not match any outer indentation level
+```
+
+**Cause:** Mis-indented `if` under `get_transcript` (roadmap **B1**).  
+**Fix:** Align `if` with function body (4 spaces). Shipped on `main`.  
+**Verify:** Uvicorn stays up with `Application startup complete` / no traceback.
+
+---
+
+### T2 — Web UI clip extract: 403 + ffmpeg exit
+
+**Where:** Dashboard → Download clip (via Next → FastAPI → yt-dlp).  
+**Symptom (UI / API detail, abbreviated):**
+
+```text
+yt-dlp failed: ... googlevideo.com/...&c=ANDROID_VR&...
+Error opening input files: Server returned 403 Forbidden (access denied)
+ERROR: ffmpeg exited with code 3436169992
+```
+
+**Cause:** YouTube CDN refused the stream URL for that player client / format (SABR / client experiment). Not a missing `LOCAL_OUTPUT_DIR`.  
+**Fix direction:** Change `player_client` away from VR defaults; prefer `android,web`; cascade formats (see T5–T7).
+
+---
+
+### T3 — CMD: “DRM protected” (misleading dead end for some clients)
+
+**Command pattern:**
+
+```cmd
+yt-dlp --extractor-args "youtube:player_client=mweb,tv,web" -f "bv*+ba/b" -o "...\test.%(ext)s" "https://youtu.be/rKaiTQyaijI"
+```
+
+**Symptom:**
+
+```text
+WARNING: ... n challenge solving failed: ... JavaScript runtime ... EJS
+WARNING: ... mweb client https formats require a GVS PO Token ...
+WARNING: ... Some tv client https formats have been skipped as they are DRM protected
+ERROR: [youtube] rKaiTQyaijI: This video is DRM protected
+```
+
+**Cause:** With that client set, yt-dlp only saw DRM/unavailable formats. Same video later downloaded with other clients (not true “impossible forever”).  
+**Fix direction:** Try `android,web`; install Node for EJS; do not treat one client’s DRM error as final for all clients.
+
+---
+
+### T4 — CMD: truncated URL (operator error)
+
+**Command mistake:** URL ended at `https://youtu.be` with **no video id**.
+
+**Symptom:**
+
+```text
+[generic] Extracting URL: https://youtu.be
+[redirect] Following redirect to https://www.youtube.com/?feature=youtu.be
+[youtube:tab] Playlist recommended: Downloading 0 items
+[download] Finished downloading playlist: recommended
+```
+
+**Cause:** Incomplete paste.  
+**Fix:** Always use full URL, e.g. `https://youtu.be/rKaiTQyaijI` or `https://www.youtube.com/watch?v=rKaiTQyaijI`.
+
+---
+
+### T5 — CMD: high DASH 403 mid-download
+
+**Command:**
+
+```cmd
+yt-dlp --extractor-args "youtube:player_client=default,android" -f "bv*+ba/b" -o "%USERPROFILE%\Desktop\whop clips\test2.%(ext)s" "https://youtu.be/rKaiTQyaijI"
+```
+
+**Symptom:**
+
+```text
+[youtube] rKaiTQyaijI: Downloading android vr player API JSON
+WARNING: ... Some android client https formats have been skipped ... SABR-only streaming experiment
+[info] rKaiTQyaijI: Downloading 1 format(s): 401+251
+[download] Destination: ...
+[download] 1.8% of 1.06GiB ...
+ERROR: unable to download video data: HTTP Error 403: Forbidden
+```
+
+**Cause:** SABR / blocked high-quality DASH (`401+251`).  
+**Lesson:** “Started downloading” ≠ will finish; 403 can hit mid-file.
+
+---
+
+### T6 — CMD: progressive success (proof of life)
+
+**Command:**
+
+```cmd
+yt-dlp --extractor-args "youtube:player_client=android,web" -f "bv*+ba/b" -o "%USERPROFILE%\Desktop\whop clips\test.%(ext)s" "https://youtu.be/rKaiTQyaijI"
+```
+
+**Result:**
+
+```text
+[info] rKaiTQyaijI: Downloading 1 format(s): 18
+[download] 100% of 126.16MiB in 00:00:18 at 6.71MiB/s
+```
+
+**Lesson:** Format **18** (progressive) worked on the same machine/network where `401+251` 403’d. Backend cascade exists to try HQ first, then safe formats.
+
+---
+
+### T7 — Output template typo on Windows CMD
+
+**Mistake:** `-o "...\test.%%(ext)s"` (doubled `%` from batch escaping habits).
+
+**Symptom:** File saved with a literal `%(ext)s` in the name instead of `.mp4`.  
+**Fix:** In interactive CMD use a single `%`: `-o "%USERPROFILE%\Desktop\whop clips\test.%(ext)s"`.
+
+---
+
+### T8 — `pip install -U --pre "yt-dlp[default]"` cancelled
+
+**Symptom:** `ERROR: Operation cancelled by user`  
+**Note:** Upgrade was recommended for fresher extractors; not required to explain T6 success, but still recommended periodically.
+
+---
+
+### T9 — Quality “works but looks bad”
+
+**Symptom:** After cascade/safe path, download succeeds but resolution is low (progressive ceiling).  
+**Cause:** Intentional tradeoff when DASH HQ 403s.  
+**Fix direction:** Keep HQ-first cascade; optional cookies, EJS/Node, yt-dlp nightly; do not promise permanent 1080p/4K.
+
+---
+
+### T10 — Pasting chat text into CMD
+
+**Symptom:**
+
+```text
+cd redo, heres the path for the folder C:\Users\...
+The filename, directory name, or volume label syntax is incorrect.
+```
+
+**Cause:** Whole chat sentence pasted as a command.  
+**Fix:** Only paste pure commands / paths.
+
+---
+
+### Quick recovery checklist
+
+| Symptom | First check |
+|---------|-------------|
+| Uvicorn import crash | `transcript.py` indentation (B1) |
+| 403 / ANDROID_VR / ffmpeg exit | Client + format cascade; update yt-dlp |
+| DRM protected | Try `android,web`; other formats may still exist |
+| 0-item recommended playlist | Full video URL with id |
+| Low quality but success | Expected under SABR; HQ try still runs first |
+| No file in `whop clips` | Set `LOCAL_OUTPUT_DIR`; only copies on **success** |
+
+---
+
 ## Deploy & cost (short)
 
 - Frontend free tiers (Vercel/Pages) OK for UI.
@@ -117,7 +289,8 @@ Successful clips are **also copied** into `LOCAL_OUTPUT_DIR` via `app/core/local
 ## AI handoff prompt (copy-paste)
 
 > Read `docs/SESSION_NOTES.md` and `docs/REVIEW_AND_ROADMAP.md`.  
-> YouTube: use quality cascade (HQ DASH → progressive on 403); clients android+web.  
+> Pay attention to **Test log / errors seen** before changing yt-dlp options.  
+> YouTube: quality cascade (HQ DASH → progressive on 403); clients android+web.  
 > Local output: respect `LOCAL_OUTPUT_DIR`.  
 > Export aspect/fit/quality are UI-ready but backend must apply ffmpeg recipes (P2).  
 > Do not claim FastAPI UA as root cause of 403 on localhost. Update these docs when you change download behavior.
