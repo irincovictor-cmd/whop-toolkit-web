@@ -1,6 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import {
+  downloadTextFile,
+  safeFilenameBase,
+  segmentsToSrt,
+  segmentsToTxt,
+} from "@/lib/transcript-export";
 
 interface VideoMetadata {
   title: string;
@@ -10,6 +16,7 @@ interface VideoMetadata {
   url: string;
   thumbnail?: string;
   platform?: string;
+  extractor?: string;
 }
 
 interface TranscriptSegment {
@@ -23,6 +30,7 @@ interface AnalysisResult {
   viralityScore: number;
   tags: string[];
   suggestedClips: { quote: string; reason: string }[];
+  _model?: string;
 }
 
 type Aspect = "original" | "portrait" | "landscape";
@@ -80,6 +88,7 @@ export default function ToolkitApp() {
   const [quality, setQuality] = useState<Quality>("1080");
   const [maxMb, setMaxMb] = useState("");
   const [transcript, setTranscript] = useState<TranscriptSegment[] | null>(null);
+  const [transcriptMeta, setTranscriptMeta] = useState<{ source?: string } | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,18 +99,20 @@ export default function ToolkitApp() {
     setStatus(null);
     setMetadata(null);
     setTranscript(null);
+    setTranscriptMeta(null);
     setAnalysis(null);
     setBusy("metadata");
 
     try {
       const res = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to fetch metadata");
+      if (!res.ok) throw new Error(data.error || data.detail || "Failed to fetch metadata");
       setMetadata(data);
       if (data.duration) {
         setEndInput(formatDuration(Math.min(30, Math.floor(data.duration))));
       }
-      setStatus(`Loaded: ${data.title}`);
+      const plat = data.platform ? ` · ${data.platform}` : "";
+      setStatus(`Loaded: ${data.title}${plat}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to fetch metadata");
     } finally {
@@ -121,8 +132,6 @@ export default function ToolkitApp() {
 
     setBusy("clip");
     try {
-      // aspect / fit / quality / maxMb are product UI (Figma). Backend still only
-      // accepts url, start, end, format until P2 export API is wired.
       const res = await fetch("/api/clips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -141,7 +150,7 @@ export default function ToolkitApp() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Clip extraction failed");
+        throw new Error(data.error || data.detail || "Clip extraction failed");
       }
 
       const blob = await res.blob();
@@ -163,6 +172,7 @@ export default function ToolkitApp() {
     setError(null);
     setStatus(null);
     setTranscript(null);
+    setTranscriptMeta(null);
     setAnalysis(null);
     setBusy("transcript");
 
@@ -173,14 +183,31 @@ export default function ToolkitApp() {
         body: JSON.stringify({ url }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Transcript fetch failed");
+      if (!res.ok) throw new Error(data.error || data.detail || "Transcript fetch failed");
       setTranscript(data.segments ?? []);
-      setStatus(`Transcript loaded (${data.source}).`);
+      setTranscriptMeta({ source: data.source });
+      setStatus(
+        `Transcript loaded (${data.source}${data.platform ? ` · ${data.platform}` : ""}) — download SRT for CapCut.`
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Transcript fetch failed");
     } finally {
       setBusy(null);
     }
+  }
+
+  function downloadSrt() {
+    if (!transcript?.length) return;
+    const name = `${safeFilenameBase(metadata?.title)}.srt`;
+    downloadTextFile(name, segmentsToSrt(transcript), "application/x-subrip");
+    setStatus(`Saved ${name} — import as captions in CapCut / Premiere.`);
+  }
+
+  function downloadTxt() {
+    if (!transcript?.length) return;
+    const name = `${safeFilenameBase(metadata?.title)}.txt`;
+    downloadTextFile(name, segmentsToTxt(transcript, true), "text/plain");
+    setStatus(`Saved ${name}.`);
   }
 
   async function analyzeTranscript() {
@@ -201,9 +228,16 @@ export default function ToolkitApp() {
         body: JSON.stringify({ transcript: fullText, videoTitle: metadata?.title }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Analysis failed");
+      if (!res.ok) {
+        const extra = data.details?.length ? ` (${data.details.join(" | ")})` : "";
+        throw new Error((data.error || "Analysis failed") + extra);
+      }
       setAnalysis(data);
-      setStatus("Gemini analysis complete.");
+      setStatus(
+        data._model
+          ? `Gemini analysis complete (${data._model}).`
+          : "Gemini analysis complete."
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Analysis failed");
     } finally {
@@ -216,13 +250,12 @@ export default function ToolkitApp() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
-      {/* URL bar */}
       <div className="flex flex-col gap-2 rounded-2xl border border-ink-border bg-ink-surface p-2 sm:flex-row sm:items-center">
         <input
           type="url"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="Paste YouTube, TikTok, Instagram, X, or Vimeo URL…"
+          placeholder="Paste YouTube, TikTok, Instagram, X, Vimeo, or Facebook URL…"
           className={`${inputClass} border-0 bg-ink-raised/80 sm:flex-1`}
         />
         <button
@@ -238,10 +271,10 @@ export default function ToolkitApp() {
         <div className="rounded-2xl border border-dashed border-ink-border bg-ink-surface/50 px-6 py-16 text-center">
           <p className="text-sm font-medium text-mist">Paste a link to get started</p>
           <p className="mt-2 text-xs text-mist-muted">
-            YouTube · TikTok · Instagram · X · Vimeo · Facebook (planned)
+            Multi-platform via yt-dlp · captions or Whisper for transcript · SRT for CapCut
           </p>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {["YouTube", "TikTok", "Instagram", "X", "Vimeo"].map((p) => (
+            {["YouTube", "TikTok", "Instagram", "X", "Vimeo", "Facebook"].map((p) => (
               <span
                 key={p}
                 className="rounded-full border border-ink-border bg-ink-raised px-3 py-1 text-[11px] text-mist-muted"
@@ -255,7 +288,6 @@ export default function ToolkitApp() {
 
       {metadata && (
         <div className="grid gap-4 lg:grid-cols-2">
-          {/* Left column */}
           <div className="space-y-4">
             <section className="overflow-hidden rounded-2xl border border-ink-border bg-ink-surface">
               <div className="aspect-video bg-accent-soft">
@@ -273,11 +305,17 @@ export default function ToolkitApp() {
                 )}
               </div>
               <div className="p-4">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  {metadata.platform && (
+                    <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-hover">
+                      {metadata.platform}
+                    </span>
+                  )}
+                </div>
                 <h2 className="text-sm font-semibold text-mist">{metadata.title}</h2>
                 <p className="mt-1 text-xs text-mist-muted">
                   {metadata.uploader}
                   {metadata.duration != null && <> · {formatDuration(metadata.duration)}</>}
-                  {" · watermark-free when the source allows"}
                 </p>
               </div>
             </section>
@@ -341,10 +379,6 @@ export default function ToolkitApp() {
                     Cover (zoom fill)
                   </Pill>
                 </div>
-                <p className="mt-2 text-[11px] text-mist-muted">
-                  Cover fills 9:16 without treating side-slice crop as the only option. Backend wiring is still
-                  roadmap P2 — UI is ready.
-                </p>
               </div>
 
               <div className="mt-4">
@@ -381,13 +415,9 @@ export default function ToolkitApp() {
               >
                 {busy === "clip" ? "Extracting…" : "Download clip"}
               </button>
-              <p className="mt-2 text-[11px] text-mist-muted">
-                Range fetch via yt-dlp · file is sent to your browser (not stored as a library)
-              </p>
             </section>
           </div>
 
-          {/* Right column */}
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <button
@@ -407,10 +437,47 @@ export default function ToolkitApp() {
             </div>
 
             <section className="rounded-2xl border border-ink-border bg-ink-surface p-5">
-              <h3 className="mb-2 text-sm font-semibold text-mist">Transcript · captions / Whisper</h3>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-mist">
+                  Transcript
+                  {transcriptMeta?.source ? (
+                    <span className="ml-2 text-[11px] font-normal text-mist-muted">
+                      · {transcriptMeta.source}
+                    </span>
+                  ) : null}
+                </h3>
+                {transcript && transcript.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={downloadSrt}
+                      className="rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1 text-[11px] font-semibold text-mist hover:border-accent/50"
+                    >
+                      Download .srt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadTxt}
+                      className="rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1 text-[11px] font-semibold text-mist hover:border-accent/50"
+                    >
+                      Download .txt
+                    </button>
+                  </div>
+                )}
+              </div>
+              <p className="mb-2 text-[11px] text-mist-muted">
+                .srt has timestamps (CapCut: Captions → Import). Timed to each line start/end.
+              </p>
               {transcript ? (
-                <div className="scroll-dark max-h-40 overflow-auto text-xs leading-relaxed text-mist-muted">
-                  {transcript.map((s) => s.text).join(" ")}
+                <div className="scroll-dark max-h-48 overflow-auto text-xs leading-relaxed text-mist-muted">
+                  {transcript.map((s, i) => (
+                    <p key={i} className="mb-1">
+                      <span className="text-mist-muted/70">
+                        [{formatDuration(s.start)}]
+                      </span>{" "}
+                      {s.text}
+                    </p>
+                  ))}
                 </div>
               ) : (
                 <p className="text-xs text-mist-muted">No transcript yet.</p>
@@ -428,13 +495,18 @@ export default function ToolkitApp() {
               </div>
 
               {!analysis && (
-                <p className="text-xs text-mist-muted">Run analysis after loading a transcript.</p>
+                <p className="text-xs text-mist-muted">
+                  Needs GEMINI_API_KEY in frontend/.env.local. If one model fails, the API tries
+                  fallbacks automatically.
+                </p>
               )}
 
               {analysis && (
                 <div className="space-y-4 text-sm">
                   <div>
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-mist-muted">Summary</p>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-mist-muted">
+                      Summary
+                    </p>
                     <p className="mt-1 text-mist">{analysis.summary}</p>
                   </div>
                   {analysis.tags?.length > 0 && (
@@ -460,7 +532,9 @@ export default function ToolkitApp() {
                             key={i}
                             className="rounded-xl border border-ink-border/60 bg-ink-surface px-3 py-2"
                           >
-                            <p className="text-xs font-semibold text-mist">&ldquo;{clip.quote}&rdquo;</p>
+                            <p className="text-xs font-semibold text-mist">
+                              &ldquo;{clip.quote}&rdquo;
+                            </p>
                             <p className="mt-0.5 text-[11px] text-mist-muted">{clip.reason}</p>
                           </li>
                         ))}
