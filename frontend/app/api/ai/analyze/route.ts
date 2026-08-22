@@ -38,10 +38,9 @@ const RESPONSE_SCHEMA = {
 
 // Prefer flash models; fall back if one id is retired or quota-blocked.
 const MODEL_CANDIDATES = [
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
-  "gemini-1.5-flash",
-  "gemini-flash-latest",
+  "gemini-3.6-flash",
+  "gemini-3.7-flash",
+  "gemini-3.5-flash-lite",
 ];
 
 export async function POST(req: NextRequest) {
