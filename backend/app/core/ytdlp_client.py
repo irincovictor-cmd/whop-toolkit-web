@@ -8,6 +8,9 @@ Strategy: callers should try FORMAT_VIDEO_HQ first, then FORMAT_VIDEO_SAFE.
 Clients: android+web matched successful local downloads on this project.
 """
 
+import os
+import subprocess
+from pathlib import Path
 from urllib.parse import urlparse
 
 BROWSER_USER_AGENT = (
@@ -74,3 +77,90 @@ def format_attempts(url: str, want_audio_only: bool = False) -> list[str]:
 def format_selector(url: str, want_audio_only: bool = False) -> str:
     """Single format string (first preference). Prefer format_attempts for resilience."""
     return format_attempts(url, want_audio_only)[0]
+
+
+# ---------------------------------------------------------------------------
+# Shared CLI-invocation plumbing.
+#
+# clips.py, transcript.py, and download.py all shelled out to yt-dlp with
+# their own near-identical copies of "add UA/referer/cookies/extractor-args
+# flags, then run and cascade through format_attempts on a YouTube-style
+# block." That logic lived in three places and drifted slightly each time.
+# It now lives here once; routes only supply the parts that differ (the
+# yt-dlp verbs specific to that route, e.g. --download-sections).
+# ---------------------------------------------------------------------------
+
+
+def base_cli_flags(url: str) -> list[str]:
+    """UA / referer / cookies / extractor-args flags shared by every yt-dlp
+    subprocess call. Callers append these to their route-specific flags,
+    then the target URL last."""
+    options = build_ydl_options(url)
+    flags: list[str] = ["--user-agent", options["http_headers"]["User-Agent"]]
+
+    referer = options["http_headers"].get("Referer")
+    if referer:
+        flags += ["--referer", referer]
+
+    # Optional: export YTDLP_COOKIES=/path/to/cookies.txt for tougher sessions
+    # (see docs/SESSION_NOTES.md "PO tokens / proxies").
+    cookies = os.getenv("YTDLP_COOKIES", "").strip()
+    if cookies and Path(cookies).is_file():
+        flags += ["--cookies", cookies]
+
+    clients = options.get("extractor_args", {}).get("youtube", {}).get("player_client", [])
+    if clients:
+        flags += ["--extractor-args", f"youtube:player_client={','.join(clients)}"]
+
+    return flags
+
+
+def looks_like_youtube_block(stderr: str) -> bool:
+    """True if stderr matches the SABR/PO-token/DRM-style failures documented
+    in docs/SESSION_NOTES.md (Test log T2/T3/T5) that warrant cascading to
+    the next, safer format rather than failing outright."""
+    s = (stderr or "").lower()
+    return any(
+        token in s
+        for token in ("403", "forbidden", "sabr", "po token", "drm protected", "http error 403")
+    )
+
+
+def run_with_format_cascade(
+    build_cmd,
+    url: str,
+    work_dir: Path,
+    output_id: str,
+    want_audio_only: bool = False,
+    timeout: int = 300,
+) -> tuple[subprocess.CompletedProcess, str]:
+    """Run yt-dlp, trying format_attempts(url) in order.
+
+    `build_cmd(fmt)` must return the full argv list for that format attempt
+    (route-specific flags + base_cli_flags(url) + [url]).
+
+    On a YouTube-style block (see looks_like_youtube_block), partial output
+    for this attempt is cleared and the next, safer format is tried -- this
+    is the HQ-DASH-then-progressive cascade from docs/SESSION_NOTES.md.
+    Any other kind of failure raises immediately without cascading.
+
+    Returns (CompletedProcess, format_used) on success. Raises RuntimeError
+    with the last stderr/stdout on exhausting all attempts.
+    """
+    attempts = format_attempts(url, want_audio_only=want_audio_only)
+    last_err = "unknown yt-dlp error"
+
+    for i, fmt in enumerate(attempts):
+        result = subprocess.run(build_cmd(fmt), capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0:
+            return result, fmt
+
+        last_err = result.stderr or result.stdout or last_err
+        is_last_attempt = i + 1 == len(attempts)
+        if not is_last_attempt and looks_like_youtube_block(last_err):
+            for p in work_dir.glob(f"{output_id}*"):
+                p.unlink(missing_ok=True)
+            continue
+        raise RuntimeError(last_err)
+
+    raise RuntimeError(last_err)
