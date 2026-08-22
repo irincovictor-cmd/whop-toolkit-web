@@ -1,13 +1,18 @@
 """
 POST /clips/extract
 
-YouTube quality cascade:
-  1) Try high DASH (up to 1080p) — same class of quality the old CLI often got
+Cut a timestamped clip from any yt-dlp-supported URL.
+
+YouTube quality cascade (see docs/SESSION_NOTES.md for the CLI tests this
+is based on):
+  1) Try high DASH (up to 1080p) -- same class of quality the old CLI often got
   2) On 403 / SABR-style failure, retry progressive-safe formats
 
-This mirrors what we validated in CMD: HQ can 403 mid-download; progressive completes.
+The cascade + shared CLI-flag logic lives in app.core.ytdlp_client so
+clips.py, transcript.py, and download.py don't each carry their own copy.
 """
 
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -16,9 +21,10 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from app.core.local_output import save_to_local_output
-from app.core.ytdlp_client import build_ydl_options, format_attempts
+from app.core.ytdlp_client import base_cli_flags, run_with_format_cascade
 
 router = APIRouter()
 
@@ -38,61 +44,8 @@ def _seconds_to_timestamp(s: float) -> str:
     return f"{h:02}:{m:02}:{sec:02}"
 
 
-def _looks_like_youtube_block(stderr: str) -> bool:
-    s = (stderr or "").lower()
-    return any(
-        token in s
-        for token in (
-            "403",
-            "forbidden",
-            "sabr",
-            "po token",
-            "drm protected",
-            "http error 403",
-        )
-    )
-
-
-def _run_ytdlp_section(
-    url: str,
-    section: str,
-    fmt: str,
-    output_template: str,
-) -> subprocess.CompletedProcess:
-    options = build_ydl_options(url)
-    cmd = [
-        "yt-dlp",
-        "--download-sections",
-        section,
-        "--force-keyframes-at-cuts",
-        "-f",
-        fmt,
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        output_template,
-        "--user-agent",
-        options["http_headers"]["User-Agent"],
-    ]
-    if options["http_headers"].get("Referer"):
-        cmd += ["--referer", options["http_headers"]["Referer"]]
-
-    # Optional: export YTDLP_COOKIES=/path/to/cookies.txt for tougher videos
-    import os
-
-    cookies = os.getenv("YTDLP_COOKIES", "").strip()
-    if cookies and Path(cookies).is_file():
-        cmd += ["--cookies", cookies]
-
-    if "extractor_args" in options:
-        clients = options["extractor_args"].get("youtube", {}).get("player_client", [])
-        if clients:
-            cmd += [
-                "--extractor-args",
-                f"youtube:player_client={','.join(clients)}",
-            ]
-    cmd.append(url)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+def _cleanup(work_dir: Path) -> None:
+    shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @router.post("/extract")
@@ -107,51 +60,63 @@ def extract_clip(req: ClipRequest):
     output_template = str(work_dir / f"{output_id}.%(ext)s")
     section = f"*{_seconds_to_timestamp(req.start)}-{_seconds_to_timestamp(req.end)}"
 
-    attempts = format_attempts(req.url, want_audio_only=(req.format != "mp4"))
-    last_err = ""
-    result = None
+    want_audio_only = req.format in ("mp3", "wav")
 
-    for i, fmt in enumerate(attempts):
-        result = _run_ytdlp_section(req.url, section, fmt, output_template)
-        if result.returncode == 0:
-            break
-        last_err = result.stderr or result.stdout or "unknown yt-dlp error"
-        # Only cascade on YouTube-style blocks; other errors fail immediately
-        if i + 1 < len(attempts) and _looks_like_youtube_block(last_err):
-            # clear partials before retry
-            for p in work_dir.glob(f"{output_id}*"):
-                p.unlink(missing_ok=True)
-            continue
-        raise HTTPException(status_code=500, detail=f"yt-dlp failed: {last_err[-800:]}")
+    def build_cmd(fmt: str) -> list[str]:
+        return [
+            "yt-dlp",
+            "--download-sections", section,
+            "--force-keyframes-at-cuts",
+            "-f", fmt,
+            "--merge-output-format", "mp4",
+            "-o", output_template,
+            *base_cli_flags(req.url),
+            req.url,
+        ]
 
-    if result is None or result.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"yt-dlp failed: {last_err[-800:]}")
+    try:
+        try:
+            run_with_format_cascade(
+                build_cmd, req.url, work_dir, output_id, want_audio_only=want_audio_only
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=f"yt-dlp failed: {str(e)[-800:]}")
 
-    downloaded = list(work_dir.glob(f"{output_id}.*"))
-    if not downloaded:
-        raise HTTPException(status_code=500, detail="Clip extraction produced no output file")
-    source_file = downloaded[0]
+        downloaded = list(work_dir.glob(f"{output_id}.*"))
+        if not downloaded:
+            raise HTTPException(status_code=500, detail="Clip extraction produced no output file")
+        source_file = downloaded[0]
 
-    if req.format in ("mp3", "wav"):
-        final_path = work_dir / f"{output_id}.{req.format}"
-        codec = ["-acodec", "libmp3lame", "-q:a", "2"] if req.format == "mp3" else ["-acodec", "pcm_s16le"]
-        convert_cmd = ["ffmpeg", "-y", "-i", str(source_file), "-vn", *codec, str(final_path)]
-        conv_result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=120)
-        if conv_result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"ffmpeg conversion failed: {conv_result.stderr[-800:]}")
-    else:
-        final_path = source_file
+        if want_audio_only:
+            final_path = work_dir / f"{output_id}.{req.format}"
+            codec = (
+                ["-acodec", "libmp3lame", "-q:a", "2"]
+                if req.format == "mp3"
+                else ["-acodec", "pcm_s16le"]
+            )
+            convert_cmd = ["ffmpeg", "-y", "-i", str(source_file), "-vn", *codec, str(final_path)]
+            conv_result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=120)
+            if conv_result.returncode != 0:
+                raise HTTPException(
+                    status_code=500, detail=f"ffmpeg conversion failed: {conv_result.stderr[-800:]}"
+                )
+        else:
+            final_path = source_file
 
-    nice_name = (
-        f"clip_{_seconds_to_timestamp(req.start).replace(':', '-')}"
-        f"_to_{_seconds_to_timestamp(req.end).replace(':', '-')}"
-        f"_{output_id}.{req.format if req.format in ('mp3', 'wav') else final_path.suffix.lstrip('.') or 'mp4'}"
-    )
-    saved = save_to_local_output(final_path, preferred_name=nice_name)
-    download_name = saved.name if saved else nice_name
+        ext = req.format if want_audio_only else (final_path.suffix.lstrip(".") or "mp4")
+        nice_name = (
+            f"clip_{_seconds_to_timestamp(req.start).replace(':', '-')}"
+            f"_to_{_seconds_to_timestamp(req.end).replace(':', '-')}_{output_id}.{ext}"
+        )
+        saved = save_to_local_output(final_path, preferred_name=nice_name)
+        download_name = saved.name if saved else nice_name
 
-    return FileResponse(
-        path=str(final_path),
-        filename=download_name,
-        media_type="application/octet-stream",
-    )
+        return FileResponse(
+            path=str(final_path),
+            filename=download_name,
+            media_type="application/octet-stream",
+            background=BackgroundTask(_cleanup, work_dir),
+        )
+    except HTTPException:
+        _cleanup(work_dir)
+        raise
