@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/whop-session";
+import AiHelper from "@/components/AiHelper";
 
 const NAV = [
   { href: "/dashboard", label: "Workspace" },
@@ -65,6 +66,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </header>
         <main className="flex-1 px-4 py-6 md:px-8">{children}</main>
       </div>
+
+      <AiHelper />
     </div>
   );
 }
