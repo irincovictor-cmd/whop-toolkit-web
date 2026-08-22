@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Floating "Ask AI" helper -- bottom-left so it doesn't fight the main workspace.
- * Compact panel so the input stays on screen without scrolling the page.
+ * Floating Ask-AI helper — always a compact card bottom-left.
+ * Size is locked with inline styles so it never expands to fill the page.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -17,9 +17,6 @@ const STARTER_PROMPTS = [
   "Best aspect ratio for TikTok vs YouTube Shorts?",
   "How do I sell clips as a Whop membership perk?",
 ];
-
-/** Sit just to the right of the md sidebar (w-60 = 15rem) on desktop; left edge on mobile */
-const POS = "left-5 md:left-[16.5rem]";
 
 export default function AiHelper() {
   const [open, setOpen] = useState(false);
@@ -59,27 +56,52 @@ export default function AiHelper() {
     }
   }
 
+  // Hard-locked size so long replies only scroll inside the card, never grow the panel
+  const panelStyle: React.CSSProperties = {
+    position: "fixed",
+    left: "1.25rem",
+    bottom: "5rem",
+    width: "min(20rem, calc(100vw - 2.5rem))",
+    height: "min(22rem, 45vh)",
+    zIndex: 50,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+  };
+
+  const fabStyle: React.CSSProperties = {
+    position: "fixed",
+    left: "1.25rem",
+    bottom: "1.25rem",
+    zIndex: 50,
+  };
+
   return (
     <>
       {open && (
         <div
-          className={`fixed bottom-20 z-50 flex h-[20rem] w-[18.5rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-ink-border bg-ink-surface shadow-2xl shadow-black/40 sm:h-[22rem] sm:w-[20rem] ${POS}`}
+          style={panelStyle}
+          className="rounded-2xl border border-ink-border bg-ink-surface shadow-2xl shadow-black/50"
         >
-          <div className="flex shrink-0 items-center justify-between border-b border-ink-border bg-ink-raised/50 px-3 py-2.5">
-            <div>
-              <p className="text-sm font-semibold text-mist">Toolkit Assistant</p>
+          <div className="flex shrink-0 items-center justify-between border-b border-ink-border bg-ink-raised/50 px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-mist">Toolkit Assistant</p>
               <p className="text-[10px] text-mist-muted">Video · clips · trends · Whop</p>
             </div>
             <button
+              type="button"
               onClick={() => setOpen(false)}
               aria-label="Close assistant"
-              className="rounded-lg p-1.5 text-mist-muted transition hover:bg-ink-raised hover:text-mist"
+              className="shrink-0 rounded-lg p-1.5 text-mist-muted transition hover:bg-ink-raised hover:text-mist"
             >
               ✕
             </button>
           </div>
 
-          <div ref={scrollRef} className="scroll-dark min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
+          <div
+            ref={scrollRef}
+            className="scroll-dark min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2.5"
+          >
             {messages.length === 0 && (
               <div className="space-y-2">
                 <p className="text-[11px] text-mist-muted">
@@ -89,6 +111,7 @@ export default function AiHelper() {
                   {STARTER_PROMPTS.map((p) => (
                     <button
                       key={p}
+                      type="button"
                       onClick={() => send(p)}
                       className="block w-full rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1.5 text-left text-[11px] leading-snug text-mist-muted transition hover:border-accent/40 hover:text-mist"
                     >
@@ -102,7 +125,7 @@ export default function AiHelper() {
             {messages.map((m, i) => (
               <div
                 key={i}
-                className={`max-w-[90%] rounded-xl px-2.5 py-1.5 text-xs leading-relaxed ${
+                className={`max-w-[92%] rounded-xl px-2.5 py-1.5 text-xs leading-relaxed ${
                   m.role === "user"
                     ? "ml-auto bg-accent text-white"
                     : "bg-ink-raised text-mist"
@@ -132,7 +155,7 @@ export default function AiHelper() {
               e.preventDefault();
               send(input);
             }}
-            className="flex shrink-0 items-center gap-1.5 border-t border-ink-border p-2.5"
+            className="flex shrink-0 items-center gap-1.5 border-t border-ink-border p-2"
           >
             <input
               value={input}
@@ -152,9 +175,11 @@ export default function AiHelper() {
       )}
 
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={open ? "Close assistant" : "Open assistant"}
-        className={`fixed bottom-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition hover:scale-105 hover:bg-accent-hover ${POS}`}
+        style={fabStyle}
+        className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition hover:scale-105 hover:bg-accent-hover"
       >
         {open ? (
           <span className="text-lg leading-none">✕</span>
