@@ -465,7 +465,7 @@ export default function ToolkitApp() {
               <button
                 onClick={fetchTranscript}
                 disabled={!url || busy === "transcript"}
-                className="rounded-xl border border-ink-border bg-ink-raised px-4 py-2.5 text-sm font-semibold text-mist transition hover:border-accent/40 disabled:opacity-50"
+                className="rounded-xl border border-ink-border bg-ink-raised px-4 py-2.5 text-sm font-semibold text-mist transition hover:bg-accent/40 disabled:opacity-50"
               >
                 {busy === "transcript" ? "Fetching…" : "Get transcript"}
               </button>
