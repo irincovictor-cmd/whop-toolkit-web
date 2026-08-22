@@ -36,6 +36,7 @@ interface AnalysisResult {
 type Aspect = "original" | "portrait" | "landscape";
 type FitMode = "letterbox" | "cover";
 type Quality = "720" | "1080" | "source";
+type Mode = "download" | "clip" | "transcript" | "analyze";
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -68,8 +69,8 @@ function Pill({
       onClick={onClick}
       className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
         active
-          ? "bg-accent text-white"
-          : "border border-ink-border bg-ink-raised text-mist-muted hover:text-mist"
+          ? "bg-accent text-white shadow-sm"
+          : "border border-ink-border bg-ink-raised text-mist-muted hover:border-accent/40 hover:text-mist"
       }`}
     >
       {children}
@@ -77,9 +78,26 @@ function Pill({
   );
 }
 
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-mist-muted">
+      {children}
+    </p>
+  );
+}
+
+const MODES: { id: Mode; label: string; hint: string }[] = [
+  { id: "download", label: "Download", hint: "Full video" },
+  { id: "clip", label: "Clip", hint: "Cut a section" },
+  { id: "transcript", label: "Transcript", hint: "Captions & SRT" },
+  { id: "analyze", label: "Analyze", hint: "Gemini insights" },
+];
+
 export default function ToolkitApp() {
   const [url, setUrl] = useState("");
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
+  const [mode, setMode] = useState<Mode>("download");
+
   const [startInput, setStartInput] = useState("0:00");
   const [endInput, setEndInput] = useState("0:30");
   const [format, setFormat] = useState("mp4");
@@ -87,12 +105,17 @@ export default function ToolkitApp() {
   const [fit, setFit] = useState<FitMode>("cover");
   const [quality, setQuality] = useState<Quality>("1080");
   const [maxMb, setMaxMb] = useState("");
+
   const [transcript, setTranscript] = useState<TranscriptSegment[] | null>(null);
   const [transcriptMeta, setTranscriptMeta] = useState<{ source?: string } | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+
+  const inputClass =
+    "w-full rounded-xl border border-ink-border bg-ink-raised px-3.5 py-2.5 text-sm text-mist placeholder:text-mist-muted/50 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/60";
 
   async function fetchMetadata() {
     setError(null);
@@ -113,6 +136,7 @@ export default function ToolkitApp() {
       }
       const plat = data.platform ? ` · ${data.platform}` : "";
       setStatus(`Loaded: ${data.title}${plat}`);
+      setMode("download");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to fetch metadata");
     } finally {
@@ -124,19 +148,16 @@ export default function ToolkitApp() {
     setError(null);
     setStatus(null);
     setBusy("download");
-
     try {
       const res = await fetch("/api/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, format }),
       });
-
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || data.detail || "Video download failed");
       }
-
       const blob = await res.blob();
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -161,7 +182,6 @@ export default function ToolkitApp() {
       setError("Start and end must be seconds or mm:ss / hh:mm:ss.");
       return;
     }
-
     setBusy("clip");
     try {
       const res = await fetch("/api/clips", {
@@ -179,12 +199,10 @@ export default function ToolkitApp() {
           maxMb: maxMb ? Number(maxMb) : undefined,
         }),
       });
-
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || data.detail || "Clip extraction failed");
       }
-
       const blob = await res.blob();
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -207,7 +225,6 @@ export default function ToolkitApp() {
     setTranscriptMeta(null);
     setAnalysis(null);
     setBusy("transcript");
-
     try {
       const res = await fetch("/api/transcript", {
         method: "POST",
@@ -244,14 +261,12 @@ export default function ToolkitApp() {
 
   async function analyzeTranscript() {
     if (!transcript?.length) {
-      setError("Fetch a transcript first.");
+      setError("Fetch a transcript first (Transcript tab).");
       return;
     }
-
     setError(null);
     setStatus(null);
     setBusy("analyze");
-
     const fullText = transcript.map((s) => s.text).join(" ");
     try {
       const res = await fetch("/api/ai/analyze", {
@@ -265,11 +280,7 @@ export default function ToolkitApp() {
         throw new Error((data.error || "Analysis failed") + extra);
       }
       setAnalysis(data);
-      setStatus(
-        data._model
-          ? `Gemini analysis complete (${data._model}).`
-          : "Gemini analysis complete."
-      );
+      setStatus(data._model ? `Gemini analysis complete (${data._model}).` : "Gemini analysis complete.");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Analysis failed");
     } finally {
@@ -277,35 +288,38 @@ export default function ToolkitApp() {
     }
   }
 
-  const inputClass =
-    "w-full rounded-lg border border-ink-border bg-ink-raised px-3 py-2 text-sm text-mist placeholder:text-mist-muted/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
-
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-col gap-2 rounded-2xl border border-ink-border bg-ink-surface p-2 sm:flex-row sm:items-center">
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="Paste YouTube, TikTok, Instagram, X, Vimeo, or Facebook URL…"
-          className={`${inputClass} border-0 bg-ink-raised/80 sm:flex-1`}
-        />
-        <button
-          onClick={fetchMetadata}
-          disabled={!url || busy === "metadata"}
-          className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
-        >
-          {busy === "metadata" ? "Loading…" : metadata ? "Refresh" : "Fetch info"}
-        </button>
+    <div className="mx-auto max-w-5xl space-y-6 pb-8">
+      <div className="rounded-2xl border border-ink-border bg-ink-surface p-2 shadow-glow/30">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && url && !busy && fetchMetadata()}
+            placeholder="Paste YouTube, TikTok, Instagram, X, Vimeo, or Facebook URL…"
+            className={`${inputClass} border-0 bg-transparent sm:flex-1`}
+          />
+          <button
+            onClick={fetchMetadata}
+            disabled={!url || busy === "metadata"}
+            className="shrink-0 rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
+          >
+            {busy === "metadata" ? "Loading…" : metadata ? "Refresh" : "Fetch info"}
+          </button>
+        </div>
       </div>
 
       {!metadata && !busy && (
-        <div className="rounded-2xl border border-dashed border-ink-border bg-ink-surface/50 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-mist">Paste a link to get started</p>
-          <p className="mt-2 text-xs text-mist-muted">
-            Multi-platform via yt-dlp · captions or Whisper for transcript · SRT for CapCut
+        <div className="rounded-2xl border border-dashed border-ink-border bg-ink-surface/40 px-6 py-16 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+            <span className="text-xl">▶</span>
+          </div>
+          <p className="text-base font-semibold text-mist">Paste a link to get started</p>
+          <p className="mt-2 text-sm text-mist-muted">
+            Multi-platform via yt-dlp · captions or Whisper · SRT for CapCut
           </p>
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
             {["YouTube", "TikTok", "Instagram", "X", "Vimeo", "Facebook"].map((p) => (
               <span
                 key={p}
@@ -319,10 +333,10 @@ export default function ToolkitApp() {
       )}
 
       {metadata && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-4">
-            <section className="overflow-hidden rounded-2xl border border-ink-border bg-ink-surface">
-              <div className="aspect-video bg-accent-soft">
+        <>
+          <div className="overflow-hidden rounded-2xl border border-ink-border bg-ink-surface">
+            <div className="flex flex-col sm:flex-row">
+              <div className="aspect-video w-full shrink-0 bg-accent-soft sm:w-56 sm:aspect-auto sm:self-stretch">
                 {metadata.thumbnail ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -331,267 +345,340 @@ export default function ToolkitApp() {
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-mist-muted">
+                  <div className="flex h-full min-h-[8rem] items-center justify-center text-xs text-mist-muted">
                     No thumbnail
                   </div>
                 )}
               </div>
-              <div className="p-4">
-                <div className="mb-1 flex flex-wrap items-center gap-2">
+              <div className="flex flex-1 flex-col justify-center gap-2 p-5">
+                <div className="flex flex-wrap items-center gap-2">
                   {metadata.platform && (
-                    <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-hover">
+                    <span className="rounded-full bg-accent/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-hover">
                       {metadata.platform}
                     </span>
                   )}
+                  {metadata.duration != null && (
+                    <span className="text-xs text-mist-muted">
+                      {formatDuration(metadata.duration)}
+                    </span>
+                  )}
                 </div>
-                <h2 className="text-sm font-semibold text-mist">{metadata.title}</h2>
-                <p className="mt-1 text-xs text-mist-muted">
-                  {metadata.uploader}
-                  {metadata.duration != null && <> · {formatDuration(metadata.duration)}</>}
-                </p>
+                <h2 className="text-base font-semibold leading-snug text-mist line-clamp-2">
+                  {metadata.title}
+                </h2>
+                <p className="text-sm text-mist-muted">{metadata.uploader}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-1 overflow-x-auto rounded-2xl border border-ink-border bg-ink-surface p-1.5">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setMode(m.id)}
+                className={`flex min-w-0 flex-1 flex-col items-center rounded-xl px-3 py-2.5 text-center transition ${
+                  mode === m.id
+                    ? "bg-accent text-white shadow-sm"
+                    : "text-mist-muted hover:bg-ink-raised hover:text-mist"
+                }`}
+              >
+                <span className="text-sm font-semibold">{m.label}</span>
+                <span
+                  className={`mt-0.5 hidden text-[10px] sm:block ${
+                    mode === m.id ? "text-white/70" : "text-mist-muted/70"
+                  }`}
+                >
+                  {m.hint}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-2xl border border-ink-border bg-ink-surface p-6">
+            {mode === "download" && (
+              <div className="mx-auto max-w-md space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-mist">Download full video</h3>
+                  <p className="mt-1 text-sm text-mist-muted">
+                    Grab the entire file. Same format setting is used for clips.
+                  </p>
+                </div>
+                <div>
+                  <SectionLabel>Format</SectionLabel>
+                  <div className="flex flex-wrap gap-2">
+                    {(["mp4", "mp3", "wav"] as const).map((f) => (
+                      <Pill key={f} active={format === f} onClick={() => setFormat(f)}>
+                        .{f}
+                      </Pill>
+                    ))}
+                  </div>
+                </div>
                 <button
                   onClick={downloadFullVideo}
                   disabled={!url || busy === "download"}
-                  className="mt-3 w-full rounded-xl border border-ink-border bg-ink-raised py-2.5 text-sm font-semibold text-mist transition hover:border-accent/40 disabled:opacity-50"
+                  className="w-full rounded-xl bg-accent py-3.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
                 >
                   {busy === "download" ? "Downloading…" : `Download full video (.${format})`}
                 </button>
               </div>
-            </section>
+            )}
 
-            <section className="rounded-2xl border border-ink-border bg-ink-surface p-5">
-              <h3 className="mb-4 text-sm font-semibold text-mist">Extract clip</h3>
-              <p className="-mt-3 mb-4 text-[11px] text-mist-muted">
-                Format below also applies to &ldquo;Download full video&rdquo; above.
-              </p>
-
-              <div className="grid grid-cols-3 gap-3">
-                <label className="block text-xs text-mist-muted">
-                  Start
-                  <input
-                    value={startInput}
-                    onChange={(e) => setStartInput(e.target.value)}
-                    className={`${inputClass} mt-1`}
-                  />
-                </label>
-                <label className="block text-xs text-mist-muted">
-                  End
-                  <input
-                    value={endInput}
-                    onChange={(e) => setEndInput(e.target.value)}
-                    className={`${inputClass} mt-1`}
-                  />
-                </label>
-                <label className="block text-xs text-mist-muted">
-                  Format
-                  <select
-                    value={format}
-                    onChange={(e) => setFormat(e.target.value)}
-                    className={`${inputClass} mt-1`}
-                  >
-                    <option value="mp4">mp4</option>
-                    <option value="mp3">mp3</option>
-                    <option value="wav">wav</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="mt-4">
-                <p className="mb-2 text-xs text-mist-muted">Aspect</p>
-                <div className="flex flex-wrap gap-2">
-                  <Pill active={aspect === "original"} onClick={() => setAspect("original")}>
-                    Original
-                  </Pill>
-                  <Pill active={aspect === "portrait"} onClick={() => setAspect("portrait")}>
-                    Portrait 9:16
-                  </Pill>
-                  <Pill active={aspect === "landscape"} onClick={() => setAspect("landscape")}>
-                    Landscape 16:9
-                  </Pill>
+            {mode === "clip" && (
+              <div className="space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-mist">Extract clip</h3>
+                  <p className="mt-1 text-sm text-mist-muted">
+                    Cut a timestamped section. Aspect / fit / quality apply here only.
+                  </p>
                 </div>
-              </div>
 
-              <div className="mt-4">
-                <p className="mb-2 text-xs text-mist-muted">Fit mode</p>
-                <div className="flex flex-wrap gap-2">
-                  <Pill active={fit === "letterbox"} onClick={() => setFit("letterbox")}>
-                    Letterbox
-                  </Pill>
-                  <Pill active={fit === "cover"} onClick={() => setFit("cover")}>
-                    Cover (zoom fill)
-                  </Pill>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <label className="block text-xs text-mist-muted">
+                    Start
+                    <input
+                      value={startInput}
+                      onChange={(e) => setStartInput(e.target.value)}
+                      placeholder="0:00"
+                      className={`${inputClass} mt-1.5`}
+                    />
+                  </label>
+                  <label className="block text-xs text-mist-muted">
+                    End
+                    <input
+                      value={endInput}
+                      onChange={(e) => setEndInput(e.target.value)}
+                      placeholder="0:30"
+                      className={`${inputClass} mt-1.5`}
+                    />
+                  </label>
+                  <label className="block text-xs text-mist-muted">
+                    Format
+                    <select
+                      value={format}
+                      onChange={(e) => setFormat(e.target.value)}
+                      className={`${inputClass} mt-1.5`}
+                    >
+                      <option value="mp4">mp4</option>
+                      <option value="mp3">mp3</option>
+                      <option value="wav">wav</option>
+                    </select>
+                  </label>
                 </div>
-              </div>
 
-              <div className="mt-4">
-                <p className="mb-2 text-xs text-mist-muted">Quality / max height</p>
-                <div className="flex flex-wrap gap-2">
-                  <Pill active={quality === "720"} onClick={() => setQuality("720")}>
-                    720p
-                  </Pill>
-                  <Pill active={quality === "1080"} onClick={() => setQuality("1080")}>
-                    1080p
-                  </Pill>
-                  <Pill active={quality === "source"} onClick={() => setQuality("source")}>
-                    Source
-                  </Pill>
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <div>
+                    <SectionLabel>Aspect</SectionLabel>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Pill active={aspect === "original"} onClick={() => setAspect("original")}>
+                        Original
+                      </Pill>
+                      <Pill active={aspect === "portrait"} onClick={() => setAspect("portrait")}>
+                        9:16 Portrait
+                      </Pill>
+                      <Pill active={aspect === "landscape"} onClick={() => setAspect("landscape")}>
+                        16:9 Landscape
+                      </Pill>
+                    </div>
+                  </div>
+                  <div>
+                    <SectionLabel>Fit mode</SectionLabel>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Pill active={fit === "letterbox"} onClick={() => setFit("letterbox")}>
+                        Letterbox
+                      </Pill>
+                      <Pill active={fit === "cover"} onClick={() => setFit("cover")}>
+                        Cover (zoom)
+                      </Pill>
+                    </div>
+                  </div>
+                  <div>
+                    <SectionLabel>Quality</SectionLabel>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Pill active={quality === "720"} onClick={() => setQuality("720")}>
+                        720p
+                      </Pill>
+                      <Pill active={quality === "1080"} onClick={() => setQuality("1080")}>
+                        1080p
+                      </Pill>
+                      <Pill active={quality === "source"} onClick={() => setQuality("source")}>
+                        Source
+                      </Pill>
+                    </div>
+                  </div>
+                  <div>
+                    <SectionLabel>Max size (MB, optional)</SectionLabel>
+                    <input
+                      value={maxMb}
+                      onChange={(e) => setMaxMb(e.target.value)}
+                      placeholder="e.g. 50"
+                      className={`${inputClass} max-w-[10rem]`}
+                    />
+                  </div>
                 </div>
+
+                <button
+                  onClick={extractClip}
+                  disabled={!url || !metadata || busy === "clip"}
+                  className="w-full rounded-xl bg-accent py-3.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50 sm:w-auto sm:px-10"
+                >
+                  {busy === "clip" ? "Extracting…" : "Download clip"}
+                </button>
               </div>
+            )}
 
-              <div className="mt-4">
-                <label className="block text-xs text-mist-muted">
-                  Max file size (optional, MB)
-                  <input
-                    value={maxMb}
-                    onChange={(e) => setMaxMb(e.target.value)}
-                    placeholder="e.g. 50"
-                    className={`${inputClass} mt-1 max-w-[8rem]`}
-                  />
-                </label>
-              </div>
-
-              <button
-                onClick={extractClip}
-                disabled={!url || !metadata || busy === "clip"}
-                className="mt-5 w-full rounded-xl bg-accent py-3 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
-              >
-                {busy === "clip" ? "Extracting…" : "Download clip"}
-              </button>
-            </section>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={fetchTranscript}
-                disabled={!url || busy === "transcript"}
-                className="rounded-xl border border-ink-border bg-ink-raised px-4 py-2.5 text-sm font-semibold text-mist transition hover:bg-accent/40 disabled:opacity-50"
-              >
-                {busy === "transcript" ? "Fetching…" : "Get transcript"}
-              </button>
-              <button
-                onClick={analyzeTranscript}
-                disabled={!transcript?.length || busy === "analyze"}
-                className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
-              >
-                {busy === "analyze" ? "Analyzing…" : "Analyze with Gemini"}
-              </button>
-            </div>
-
-            <section className="rounded-2xl border border-ink-border bg-ink-surface p-5">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-mist">
-                  Transcript
-                  {transcriptMeta?.source ? (
-                    <span className="ml-2 text-[11px] font-normal text-mist-muted">
-                      · {transcriptMeta.source}
-                    </span>
-                  ) : null}
-                </h3>
-                {transcript && transcript.length > 0 && (
+            {mode === "transcript" && (
+              <div className="space-y-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-mist">Transcript</h3>
+                    <p className="mt-1 text-sm text-mist-muted">
+                      YouTube captions when available, otherwise Whisper. Export .srt for CapCut.
+                    </p>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
-                      type="button"
-                      onClick={downloadSrt}
-                      className="rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1 text-[11px] font-semibold text-mist hover:border-accent/50"
+                      onClick={fetchTranscript}
+                      disabled={!url || busy === "transcript"}
+                      className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
                     >
-                      Download .srt
+                      {busy === "transcript" ? "Fetching…" : transcript ? "Refresh transcript" : "Get transcript"}
                     </button>
-                    <button
-                      type="button"
-                      onClick={downloadTxt}
-                      className="rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1 text-[11px] font-semibold text-mist hover:border-accent/50"
-                    >
-                      Download .txt
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="mb-2 text-[11px] text-mist-muted">
-                .srt has timestamps (CapCut: Captions → Import). Timed to each line start/end.
-              </p>
-              {transcript ? (
-                <div className="scroll-dark max-h-48 overflow-auto text-xs leading-relaxed text-mist-muted">
-                  {transcript.map((s, i) => (
-                    <p key={i} className="mb-1">
-                      <span className="text-mist-muted/70">
-                        [{formatDuration(s.start)}]
-                      </span>{" "}
-                      {s.text}
-                    </p>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-mist-muted">No transcript yet.</p>
-              )}
-            </section>
-
-            <section className="rounded-2xl border border-accent/30 bg-accent-soft p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-mist">Gemini analysis</h3>
-                {analysis && (
-                  <span className="rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-white">
-                    {analysis.viralityScore} / 10
-                  </span>
-                )}
-              </div>
-
-              {!analysis && (
-                <p className="text-xs text-mist-muted">
-                  Needs GEMINI_API_KEY in frontend/.env.local. If one model fails, the API tries
-                  fallbacks automatically.
-                </p>
-              )}
-
-              {analysis && (
-                <div className="space-y-4 text-sm">
-                  <div>
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-mist-muted">
-                      Summary
-                    </p>
-                    <p className="mt-1 text-mist">{analysis.summary}</p>
-                  </div>
-                  {analysis.tags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {analysis.tags.map((t) => (
-                        <span
-                          key={t}
-                          className="rounded-full border border-ink-border bg-ink-surface px-2 py-0.5 text-[11px] text-mist-muted"
+                    {transcript && transcript.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={downloadSrt}
+                          className="rounded-xl border border-ink-border bg-ink-raised px-4 py-2.5 text-sm font-semibold text-mist transition hover:border-accent/40"
                         >
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {analysis.suggestedClips?.length > 0 && (
-                    <div>
-                      <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-mist-muted">
-                        Suggested clips
-                      </p>
-                      <ul className="space-y-2">
-                        {analysis.suggestedClips.map((clip, i) => (
-                          <li
-                            key={i}
-                            className="rounded-xl border border-ink-border/60 bg-ink-surface px-3 py-2"
-                          >
-                            <p className="text-xs font-semibold text-mist">
-                              &ldquo;{clip.quote}&rdquo;
-                            </p>
-                            <p className="mt-0.5 text-[11px] text-mist-muted">{clip.reason}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                          .srt
+                        </button>
+                        <button
+                          type="button"
+                          onClick={downloadTxt}
+                          className="rounded-xl border border-ink-border bg-ink-raised px-4 py-2.5 text-sm font-semibold text-mist transition hover:border-accent/40"
+                        >
+                          .txt
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              )}
-            </section>
+
+                {transcriptMeta?.source && (
+                  <p className="text-xs text-mist-muted">
+                    Source: <span className="text-mist">{transcriptMeta.source}</span>
+                  </p>
+                )}
+
+                {transcript ? (
+                  <div className="scroll-dark max-h-[28rem] overflow-auto rounded-xl border border-ink-border bg-ink-raised/50 p-4 text-sm leading-relaxed text-mist-muted">
+                    {transcript.map((s, i) => (
+                      <p key={i} className="mb-2 last:mb-0">
+                        <span className="mr-2 inline-block min-w-[3rem] font-mono text-[11px] text-mist-muted/60">
+                          {formatDuration(s.start)}
+                        </span>
+                        {s.text}
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-ink-border px-6 py-12 text-center text-sm text-mist-muted">
+                    No transcript yet. Click “Get transcript” above.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {mode === "analyze" && (
+              <div className="space-y-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-mist">Gemini analysis</h3>
+                    <p className="mt-1 text-sm text-mist-muted">
+                      Virality score, tags, and suggested clip hooks. Requires a transcript first.
+                    </p>
+                  </div>
+                  <button
+                    onClick={analyzeTranscript}
+                    disabled={!transcript?.length || busy === "analyze"}
+                    className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
+                  >
+                    {busy === "analyze" ? "Analyzing…" : "Run analysis"}
+                  </button>
+                </div>
+
+                {!transcript?.length && !analysis && (
+                  <div className="rounded-xl border border-dashed border-ink-border px-6 py-12 text-center text-sm text-mist-muted">
+                    Switch to the <button type="button" onClick={() => setMode("transcript")} className="font-semibold text-accent hover:underline">Transcript</button> tab and fetch captions first.
+                  </div>
+                )}
+
+                {transcript?.length && !analysis && busy !== "analyze" && (
+                  <div className="rounded-xl border border-ink-border bg-ink-raised/40 px-6 py-10 text-center text-sm text-mist-muted">
+                    Transcript ready ({transcript.length} segments). Click “Run analysis”.
+                  </div>
+                )}
+
+                {analysis && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-3">
+                      <span className="rounded-full bg-accent px-3 py-1 text-sm font-bold text-white">
+                        {analysis.viralityScore} / 10
+                      </span>
+                      <span className="text-sm text-mist-muted">Virality score</span>
+                    </div>
+
+                    <div>
+                      <SectionLabel>Summary</SectionLabel>
+                      <p className="text-sm leading-relaxed text-mist">{analysis.summary}</p>
+                    </div>
+
+                    {analysis.tags?.length > 0 && (
+                      <div>
+                        <SectionLabel>Tags</SectionLabel>
+                        <div className="flex flex-wrap gap-1.5">
+                          {analysis.tags.map((t) => (
+                            <span
+                              key={t}
+                              className="rounded-full border border-ink-border bg-ink-raised px-2.5 py-1 text-[11px] text-mist-muted"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {analysis.suggestedClips?.length > 0 && (
+                      <div>
+                        <SectionLabel>Suggested clips</SectionLabel>
+                        <ul className="space-y-3">
+                          {analysis.suggestedClips.map((clip, i) => (
+                            <li
+                              key={i}
+                              className="rounded-xl border border-ink-border bg-ink-raised px-4 py-3"
+                            >
+                              <p className="text-sm font-semibold text-mist">
+                                &ldquo;{clip.quote}&rdquo;
+                              </p>
+                              <p className="mt-1 text-xs leading-relaxed text-mist-muted">
+                                {clip.reason}
+                              </p>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        </div>
+        </>
       )}
 
       {status && (
-        <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+        <p className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
           {status}
         </p>
       )}
