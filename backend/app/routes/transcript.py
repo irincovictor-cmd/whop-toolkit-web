@@ -6,7 +6,6 @@ Whisper. Works for any yt-dlp URL (TikTok/IG/etc. go straight to Whisper).
 Returns timed segments suitable for SRT export on the client.
 """
 
-import os
 import subprocess
 import tempfile
 import uuid
@@ -15,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.core.ytdlp_client import build_ydl_options, detect_platform
+from app.core.ytdlp_client import base_cli_flags, detect_platform
 
 router = APIRouter()
 
@@ -51,7 +50,6 @@ def _download_audio_only(url: str, work_dir: Path) -> Path:
     output_id = uuid.uuid4().hex[:10]
     output_template = str(work_dir / f"{output_id}.%(ext)s")
 
-    options = build_ydl_options(url)
     cmd = [
         "yt-dlp",
         "-f", "ba/ba*/bestaudio/best",
@@ -59,23 +57,9 @@ def _download_audio_only(url: str, work_dir: Path) -> Path:
         "--audio-format", "mp3",
         "--audio-quality", "128K",
         "-o", output_template,
-        "--user-agent", options["http_headers"]["User-Agent"],
+        *base_cli_flags(url),
+        url,
     ]
-    if options["http_headers"].get("Referer"):
-        cmd += ["--referer", options["http_headers"]["Referer"]]
-
-    cookies = os.getenv("YTDLP_COOKIES", "").strip()
-    if cookies and Path(cookies).is_file():
-        cmd += ["--cookies", cookies]
-
-    if "extractor_args" in options:
-        clients = options["extractor_args"].get("youtube", {}).get("player_client", [])
-        if clients:
-            cmd += [
-                "--extractor-args",
-                f"youtube:player_client={','.join(clients)}",
-            ]
-    cmd.append(url)
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
