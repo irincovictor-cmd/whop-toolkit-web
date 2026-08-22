@@ -1,36 +1,44 @@
 /**
  * Ported from modules/clip_selector.py:prompt_manual_timestamps()'s
- * duration-bounds check. That logic was already correct -- reject a
- * start/end that falls outside [0, video_duration] before it ever
- * reaches ffmpeg -- so this is a direct translation, not a rewrite.
+ * duration-bounds check. The UI enforces 5–180 s; this is the server-side
+ * belt-and-suspenders so a crafted request cannot ask for a 4-hour clip.
  */
 
-interface ClipRequestBody {
-  url?: string;
-  start?: number;
-  end?: number;
-  format?: string;
-  videoDuration?: number; // optional: pass this from the /metadata call for tighter validation
+export function validateClipRequest(body: any): string | null {
+  if (!body || typeof body !== "object") return "Invalid request body";
+  const { url, start, end } = body;
+  if (!url || typeof url !== "string") return "url is required";
+  if (typeof start !== "number" || typeof end !== "number") {
+    return "start and end must be numbers (seconds)";
+  }
+  if (start < 0 || end <= start) return "end must be greater than start";
+  const duration = end - start;
+  if (duration < 5) return "Clip must be at least 5 seconds";
+  if (duration > 180) return "Clip must be at most 180 seconds";
+  return null;
 }
 
-export function validateClipRequest(body: ClipRequestBody): string | null {
-  if (!body.url || typeof body.url !== "string") {
-    return "A video URL is required.";
-  }
-  if (typeof body.start !== "number" || typeof body.end !== "number") {
-    return "start and end must be numbers (seconds).";
-  }
-  if (body.start < 0) {
-    return "start can't be negative.";
-  }
-  if (body.end <= body.start) {
-    return "end must be after start.";
-  }
-  if (body.videoDuration && body.end > body.videoDuration) {
-    return `This video is only ${Math.floor(body.videoDuration)}s long -- both timestamps must fall within that.`;
-  }
-  if (body.format && !["mp4", "mp3", "wav"].includes(body.format)) {
-    return `Unsupported format: ${body.format}`;
-  }
+export function validateDownloadRequest(body: any): string | null {
+  if (!body || typeof body !== "object") return "Invalid request body";
+  const { url } = body;
+  if (!url || typeof url !== "string") return "url is required";
+  // Basic sanity — full URL validation is left to yt-dlp
+  if (!/^https?:\/\//i.test(url)) return "url must start with http:// or https://";
+  return null;
+}
+
+export function validateMetadataRequest(body: any): string | null {
+  if (!body || typeof body !== "object") return "Invalid request body";
+  const { url } = body;
+  if (!url || typeof url !== "string") return "url is required";
+  if (!/^https?:\/\//i.test(url)) return "url must start with http:// or https://";
+  return null;
+}
+
+export function validateTranscriptRequest(body: any): string | null {
+  if (!body || typeof body !== "object") return "Invalid request body";
+  const { url } = body;
+  if (!url || typeof url !== "string") return "url is required";
+  if (!/^https?:\/\//i.test(url)) return "url must start with http:// or https://";
   return null;
 }
