@@ -1,11 +1,8 @@
 "use client";
 
 /**
- * Floating "Ask AI" helper -- lives in the dashboard shell (see
- * app/dashboard/layout.tsx) so it's reachable from every tab, not just the
- * Workspace. Talks to /api/ai/assistant, which is scoped by system prompt
- * to this app + video/audio/clip/trend/Whop topics -- see that route for
- * the actual scope definition.
+ * Floating "Ask AI" helper -- bottom-left so it doesn't fight the main workspace.
+ * Compact panel so the input stays on screen without scrolling the page.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -20,6 +17,9 @@ const STARTER_PROMPTS = [
   "Best aspect ratio for TikTok vs YouTube Shorts?",
   "How do I sell clips as a Whop membership perk?",
 ];
+
+/** Sit just to the right of the md sidebar (w-60 = 15rem) on desktop; left edge on mobile */
+const POS = "left-5 md:left-[16.5rem]";
 
 export default function AiHelper() {
   const [open, setOpen] = useState(false);
@@ -62,11 +62,13 @@ export default function AiHelper() {
   return (
     <>
       {open && (
-        <div className="fixed bottom-24 right-5 z-50 flex h-[32rem] w-[22rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-ink-border bg-ink-surface shadow-2xl shadow-black/40">
-          <div className="flex items-center justify-between border-b border-ink-border bg-ink-raised/50 px-4 py-3">
+        <div
+          className={`fixed bottom-20 z-50 flex h-[20rem] w-[18.5rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-ink-border bg-ink-surface shadow-2xl shadow-black/40 sm:h-[22rem] sm:w-[20rem] ${POS}`}
+        >
+          <div className="flex shrink-0 items-center justify-between border-b border-ink-border bg-ink-raised/50 px-3 py-2.5">
             <div>
               <p className="text-sm font-semibold text-mist">Toolkit Assistant</p>
-              <p className="text-[11px] text-mist-muted">Video · audio · clips · trends · Whop</p>
+              <p className="text-[10px] text-mist-muted">Video · clips · trends · Whop</p>
             </div>
             <button
               onClick={() => setOpen(false)}
@@ -77,18 +79,18 @@ export default function AiHelper() {
             </button>
           </div>
 
-          <div ref={scrollRef} className="scroll-dark flex-1 space-y-3 overflow-y-auto px-4 py-4">
+          <div ref={scrollRef} className="scroll-dark min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
             {messages.length === 0 && (
-              <div className="space-y-3">
-                <p className="text-xs text-mist-muted">
-                  Ask about using the toolkit, editing/audio choices, clip strategy, or Whop.
+              <div className="space-y-2">
+                <p className="text-[11px] text-mist-muted">
+                  Ask about the toolkit, editing, clips, or Whop.
                 </p>
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {STARTER_PROMPTS.map((p) => (
                     <button
                       key={p}
                       onClick={() => send(p)}
-                      className="block w-full rounded-xl border border-ink-border bg-ink-raised px-3 py-2 text-left text-xs text-mist-muted transition hover:border-accent/40 hover:text-mist"
+                      className="block w-full rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1.5 text-left text-[11px] leading-snug text-mist-muted transition hover:border-accent/40 hover:text-mist"
                     >
                       {p}
                     </button>
@@ -100,7 +102,7 @@ export default function AiHelper() {
             {messages.map((m, i) => (
               <div
                 key={i}
-                className={`max-w-[85%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
+                className={`max-w-[90%] rounded-xl px-2.5 py-1.5 text-xs leading-relaxed ${
                   m.role === "user"
                     ? "ml-auto bg-accent text-white"
                     : "bg-ink-raised text-mist"
@@ -111,7 +113,7 @@ export default function AiHelper() {
             ))}
 
             {busy && (
-              <div className="flex w-fit items-center gap-1 rounded-xl bg-ink-raised px-3 py-2">
+              <div className="flex w-fit items-center gap-1 rounded-xl bg-ink-raised px-2.5 py-1.5">
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-mist-muted [animation-delay:-0.2s]" />
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-mist-muted [animation-delay:-0.1s]" />
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-mist-muted" />
@@ -119,7 +121,7 @@ export default function AiHelper() {
             )}
 
             {error && (
-              <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+              <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-300">
                 {error}
               </p>
             )}
@@ -130,18 +132,18 @@ export default function AiHelper() {
               e.preventDefault();
               send(input);
             }}
-            className="flex items-center gap-2 border-t border-ink-border p-3"
+            className="flex shrink-0 items-center gap-1.5 border-t border-ink-border p-2.5"
           >
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask the assistant…"
-              className="flex-1 rounded-lg border border-ink-border bg-ink-raised px-3 py-2 text-sm text-mist placeholder:text-mist-muted/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              placeholder="Ask…"
+              className="min-w-0 flex-1 rounded-lg border border-ink-border bg-ink-raised px-2.5 py-1.5 text-xs text-mist placeholder:text-mist-muted/60 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
             <button
               type="submit"
               disabled={!input.trim() || busy}
-              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
+              className="shrink-0 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
             >
               Send
             </button>
@@ -152,12 +154,12 @@ export default function AiHelper() {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label={open ? "Close assistant" : "Open assistant"}
-        className="fixed bottom-6 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition hover:bg-accent-hover hover:scale-105"
+        className={`fixed bottom-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30 transition hover:scale-105 hover:bg-accent-hover ${POS}`}
       >
         {open ? (
-          <span className="text-xl leading-none">✕</span>
+          <span className="text-lg leading-none">✕</span>
         ) : (
-          <span className="text-xl leading-none">✦</span>
+          <span className="text-lg leading-none">✦</span>
         )}
       </button>
     </>
