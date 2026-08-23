@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": backendRes.headers.get("Content-Type") || "application/octet-stream",
       "Content-Disposition": backendRes.headers.get("Content-Disposition") || "attachment",
+      "X-Video-Quality": backendRes.headers.get("X-Video-Quality") || "",
     },
   });
 }
