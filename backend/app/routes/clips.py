@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app.core.local_output import save_to_local_output
-from app.core.ytdlp_client import base_cli_flags, run_with_format_cascade
+from app.core.ytdlp_client import base_cli_flags, probe_video_quality, run_with_format_cascade
 
 router = APIRouter()
 
@@ -59,7 +59,6 @@ def extract_clip(req: ClipRequest):
     output_id = uuid.uuid4().hex[:10]
     output_template = str(work_dir / f"{output_id}.%(ext)s")
     section = f"*{_seconds_to_timestamp(req.start)}-{_seconds_to_timestamp(req.end)}"
-
     want_audio_only = req.format in ("mp3", "wav")
 
     def build_cmd(fmt: str) -> list[str]:
@@ -104,9 +103,11 @@ def extract_clip(req: ClipRequest):
             final_path = source_file
 
         ext = req.format if want_audio_only else (final_path.suffix.lstrip(".") or "mp4")
+        quality_label = None if want_audio_only else probe_video_quality(final_path)
+        quality_tag = f" ({quality_label})" if quality_label else ""
         nice_name = (
             f"clip_{_seconds_to_timestamp(req.start).replace(':', '-')}"
-            f"_to_{_seconds_to_timestamp(req.end).replace(':', '-')}_{output_id}.{ext}"
+            f"_to_{_seconds_to_timestamp(req.end).replace(':', '-')}{quality_tag}_{output_id}.{ext}"
         )
         saved = save_to_local_output(final_path, preferred_name=nice_name)
         download_name = saved.name if saved else nice_name
@@ -116,6 +117,7 @@ def extract_clip(req: ClipRequest):
             filename=download_name,
             media_type="application/octet-stream",
             background=BackgroundTask(_cleanup, work_dir),
+            headers={"X-Video-Quality": quality_label or ""},
         )
     except HTTPException:
         _cleanup(work_dir)

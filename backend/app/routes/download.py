@@ -24,13 +24,15 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app.core.local_output import save_to_local_output
-from app.core.ytdlp_client import base_cli_flags, detect_platform, run_with_format_cascade
+from app.core.ytdlp_client import (
+    base_cli_flags,
+    detect_platform,
+    probe_video_quality,
+    run_with_format_cascade,
+)
 
 router = APIRouter()
 
-# Platforms yt-dlp reliably extracts today for this feature. Anything else
-# still gets *tried* (yt-dlp supports 1000+ sites), this list is just what
-# we've verified and can message confidently in the UI.
 SUPPORTED_PLATFORMS = {
     "youtube",
     "tiktok",
@@ -75,8 +77,6 @@ def download_video(req: DownloadRequest):
             )
         except RuntimeError as e:
             msg = str(e)
-            # Give platform-specific hints for the two most common failure
-            # modes on non-YouTube sites instead of a raw yt-dlp traceback.
             hint = ""
             low = msg.lower()
             if "login" in low or "private" in low:
@@ -109,7 +109,9 @@ def download_video(req: DownloadRequest):
             final_path = source_file
 
         ext = req.format if want_audio_only else (final_path.suffix.lstrip(".") or "mp4")
-        nice_name = f"{platform}_{output_id}.{ext}"
+        quality_label = None if want_audio_only else probe_video_quality(final_path)
+        quality_tag = f" ({quality_label})" if quality_label else ""
+        nice_name = f"{platform}{quality_tag}_{output_id}.{ext}"
         saved = save_to_local_output(final_path, preferred_name=nice_name)
         download_name = saved.name if saved else nice_name
 
@@ -118,6 +120,7 @@ def download_video(req: DownloadRequest):
             filename=download_name,
             media_type="application/octet-stream",
             background=BackgroundTask(_cleanup, work_dir),
+            headers={"X-Video-Quality": quality_label or ""},
         )
     except HTTPException:
         _cleanup(work_dir)

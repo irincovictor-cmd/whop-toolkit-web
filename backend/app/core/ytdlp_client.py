@@ -8,6 +8,7 @@ Strategy: callers should try FORMAT_VIDEO_HQ first, then FORMAT_VIDEO_SAFE.
 Clients: android+web matched successful local downloads on this project.
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -18,10 +19,20 @@ BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
+YOUTUBE_PLAYER_CLIENTS = ["default", "android"]
 
 # Attempt first: real 720/1080 when YouTube allows DASH.
-FORMAT_VIDEO_HQ = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+# NOTE: deliberately NOT falling through to an unrestricted "/best" here.
+# yt-dlp evaluates format selectors internally -- an unbounded trailing
+# fallback lets it silently pick any available format (even very low res)
+# while still exiting 0, which meant our own cascade below never even
+# triggered because it only sees the low quality as a "success." Keeping
+# both alternatives height-capped forces a real failure when 1080 truly
+# isn't available, so run_with_format_cascade() actually gets a chance to
+# retry with FORMAT_VIDEO_SAFE instead of yt-dlp quietly downgrading first.
+# Confirmed via side-by-side comparison against the CLI tool, which never
+# had this trailing fallback and consistently got higher quality.
+FORMAT_VIDEO_HQ = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
 # Fallback: progressive / SABR-safe (often ~360p–720p, but completes).
 FORMAT_VIDEO_SAFE = (
     "best[height<=720][ext=mp4]/best[height<=480]/best[protocol^=http]/best"
@@ -79,18 +90,6 @@ def format_selector(url: str, want_audio_only: bool = False) -> str:
     return format_attempts(url, want_audio_only)[0]
 
 
-# ---------------------------------------------------------------------------
-# Shared CLI-invocation plumbing.
-#
-# clips.py, transcript.py, and download.py all shelled out to yt-dlp with
-# their own near-identical copies of "add UA/referer/cookies/extractor-args
-# flags, then run and cascade through format_attempts on a YouTube-style
-# block." That logic lived in three places and drifted slightly each time.
-# It now lives here once; routes only supply the parts that differ (the
-# yt-dlp verbs specific to that route, e.g. --download-sections).
-# ---------------------------------------------------------------------------
-
-
 def base_cli_flags(url: str) -> list[str]:
     """UA / referer / cookies / extractor-args flags shared by every yt-dlp
     subprocess call. Callers append these to their route-specific flags,
@@ -102,8 +101,6 @@ def base_cli_flags(url: str) -> list[str]:
     if referer:
         flags += ["--referer", referer]
 
-    # Optional: export YTDLP_COOKIES=/path/to/cookies.txt for tougher sessions
-    # (see docs/SESSION_NOTES.md "PO tokens / proxies").
     cookies = os.getenv("YTDLP_COOKIES", "").strip()
     if cookies and Path(cookies).is_file():
         flags += ["--cookies", cookies]
@@ -124,6 +121,29 @@ def looks_like_youtube_block(stderr: str) -> bool:
         token in s
         for token in ("403", "forbidden", "sabr", "po token", "drm protected", "http error 403")
     )
+
+
+def probe_video_quality(path: Path) -> str | None:
+    """Returns the actual achieved resolution as e.g. '1080p', by reading
+    the real video stream height with ffprobe -- not what we *asked*
+    yt-dlp for, what it actually delivered. This is what lets a filename
+    honestly say "(720p)" when the safe-format cascade fired, instead of
+    the user only finding out by eyeballing playback quality. Returns None
+    for audio-only files (no video stream) or if ffprobe fails."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=height",
+        "-of", "json", str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if not streams or not streams[0].get("height"):
+            return None
+        return f"{streams[0]['height']}p"
+    except Exception:
+        return None
 
 
 def run_with_format_cascade(
