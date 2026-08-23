@@ -3,13 +3,6 @@
  *
  * Conversational helper widget (see components/AiHelper.tsx) -- distinct
  * from /api/ai/analyze, which does one-shot structured transcript analysis.
- * This route holds a short back-and-forth chat, scoped by system prompt to
- * this product's domain: using the toolkit itself, plus general creator
- * questions on video editing, audio/music, clipping, and short-form trends.
- *
- * Stateless on the server -- the client resends the running message list
- * each turn (see ANTHROPIC_API_IN_ARTIFACTS-style pattern used elsewhere
- * in this repo). No conversation is persisted server-side.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -41,7 +34,11 @@ video/audio/clips/trends/Whop topics -- don't just refuse silently.
 
 Be concise and concrete. Prefer short, direct answers over long essays;
 use steps only when the user needs to actually do a sequence of things.
-Never invent app features that don't exist in the list above.`;
+Never invent app features that don't exist in the list above.
+
+IMPORTANT: Reply in plain text only. Do not use markdown, asterisks for bold,
+bullet markers with stars, code fences, or any formatting symbols. Write
+normal sentences and numbered lists like 1. 2. 3. if needed.`;
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -67,8 +64,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "messages (non-empty array) is required" }, { status: 400 });
   }
 
-  // Cap history sent per request -- this is a lightweight helper widget,
-  // not a long-context research assistant.
   const recent = messages.slice(-20);
   const contents = recent.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
