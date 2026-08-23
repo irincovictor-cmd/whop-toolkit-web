@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Floating Ask-AI helper — always a compact card bottom-left.
- * Size is locked with inline styles so it never expands to fill the page.
+ * Floating Ask-AI helper — compact card bottom-right.
+ * Size locked so it never expands; markdown asterisks stripped from replies.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -17,6 +17,18 @@ const STARTER_PROMPTS = [
   "Best aspect ratio for TikTok vs YouTube Shorts?",
   "How do I sell clips as a Whop membership perk?",
 ];
+
+/** Remove **bold**, *italic*, and similar markdown markers for clean display */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "• ");
+}
 
 export default function AiHelper() {
   const [open, setOpen] = useState(false);
@@ -48,7 +60,8 @@ export default function AiHelper() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Assistant failed to respond");
-      setMessages([...next, { role: "assistant", content: data.reply || "…" }]);
+      const reply = stripMarkdown(data.reply || "…");
+      setMessages([...next, { role: "assistant", content: reply }]);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Assistant failed to respond");
     } finally {
@@ -56,10 +69,9 @@ export default function AiHelper() {
     }
   }
 
-  // Hard-locked size so long replies only scroll inside the card, never grow the panel
   const panelStyle: React.CSSProperties = {
     position: "fixed",
-    left: "1.25rem",
+    right: "1.25rem",
     bottom: "5rem",
     width: "min(20rem, calc(100vw - 2.5rem))",
     height: "min(22rem, 45vh)",
@@ -71,7 +83,7 @@ export default function AiHelper() {
 
   const fabStyle: React.CSSProperties = {
     position: "fixed",
-    left: "1.25rem",
+    right: "1.25rem",
     bottom: "1.25rem",
     zIndex: 50,
   };
