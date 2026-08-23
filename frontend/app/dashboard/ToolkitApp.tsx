@@ -106,6 +106,7 @@ export default function ToolkitApp() {
   const [maxMb, setMaxMb] = useState("");
   const [transcript, setTranscript] = useState<TranscriptSegment[] | null>(null);
   const [transcriptMeta, setTranscriptMeta] = useState<{ source?: string } | null>(null);
+  const [localFile, setLocalFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -236,6 +237,34 @@ export default function ToolkitApp() {
       setStatus(`Transcript loaded (${data.source}${data.platform ? ` · ${data.platform}` : ""}) — download SRT for CapCut.`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Transcript fetch failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function fetchTranscriptFromFile() {
+    if (!localFile) {
+      setError("Choose a video file first.");
+      return;
+    }
+    setError(null);
+    setStatus(null);
+    setTranscript(null);
+    setTranscriptMeta(null);
+    setAnalysis(null);
+    setBusy("transcript-local");
+    try {
+      const form = new FormData();
+      form.append("file", localFile);
+      form.append("whisper_model", "base");
+      const res = await fetch("/api/transcript/local", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.detail || "Local transcript failed");
+      setTranscript(data.segments ?? []);
+      setTranscriptMeta({ source: data.source });
+      setStatus(`Transcript loaded from ${localFile.name} (Whisper) — download SRT for CapCut.`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Local transcript failed");
     } finally {
       setBusy(null);
     }
@@ -429,6 +458,25 @@ export default function ToolkitApp() {
                   </div>
                 </div>
                 {transcriptMeta?.source && (<p className="text-xs text-mist-muted">Source: <span className="text-mist">{transcriptMeta.source}</span></p>)}
+                <div className="flex flex-col gap-2 rounded-xl border border-dashed border-ink-border p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-mist-muted">Or transcribe a video already on your device:</span>
+                    <input
+                      type="file"
+                      accept="video/*,audio/*"
+                      onChange={(e) => setLocalFile(e.target.files?.[0] ?? null)}
+                      className="text-xs text-mist-muted file:mr-2 file:rounded-lg file:border-0 file:bg-ink-raised file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-mist hover:file:border-accent/40"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchTranscriptFromFile}
+                    disabled={!localFile || busy === "transcript-local"}
+                    className="rounded-xl border border-ink-border bg-ink-raised px-4 py-2 text-xs font-semibold text-mist transition hover:border-accent/40 disabled:opacity-50"
+                  >
+                    {busy === "transcript-local" ? "Transcribing…" : "Transcribe file"}
+                  </button>
+                </div>
                 {transcript ? (
                   <div className="scroll-dark max-h-[28rem] overflow-auto rounded-xl border border-ink-border bg-ink-raised/50 p-4 text-sm leading-relaxed text-mist-muted">
                     {transcript.map((s, i) => (
