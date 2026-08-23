@@ -4,14 +4,23 @@ POST /transcript
 Try YouTube captions first when applicable; otherwise audio-only download +
 Whisper. Works for any yt-dlp URL (TikTok/IG/etc. go straight to Whisper).
 Returns timed segments suitable for SRT export on the client.
+
+POST /transcript/local
+
+Same Whisper path, but for a video file already sitting on the user's
+device (e.g. something they downloaded earlier) instead of a URL --
+mirrors the CLI tool's import_local_video() + extract_audio_from_source()
+flow. No YouTube captions possible for a local file, so this always goes
+straight to Whisper.
 """
 
+import shutil
 import subprocess
 import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.ytdlp_client import base_cli_flags, detect_platform
@@ -91,6 +100,22 @@ def _transcribe_with_whisper(audio_path: Path, model_size: str):
     return {"source": "whisper", "language": info.language, "segments": segments}
 
 
+def _extract_audio_from_upload(video_path: Path, work_dir: Path) -> Path:
+    """ffmpeg audio-extract for an already-uploaded local file -- mirrors
+    the CLI's extract_audio_from_source()."""
+    audio_path = work_dir / "audio.mp3"
+    conv = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(video_path), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(audio_path)],
+        capture_output=True, text=True, timeout=600,
+    )
+    if conv.returncode != 0 or not audio_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Couldn't extract audio from that file: {conv.stderr[-800:]}",
+        )
+    return audio_path
+
+
 @router.post("")
 def get_transcript(req: TranscriptRequest):
     from app.routes.metadata import get_metadata
@@ -117,3 +142,39 @@ def get_transcript(req: TranscriptRequest):
     finally:
         for f in work_dir.glob("*"):
             f.unlink(missing_ok=True)
+
+
+# 500 MB cap -- generous for a downloaded clip/short video, but stops an
+# accidental multi-GB upload from tying up the server. Adjust if this
+# turns out too tight for real usage.
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+
+
+@router.post("/local")
+async def get_transcript_from_upload(
+    file: UploadFile = File(...),
+    whisper_model: str = Form("base"),
+):
+    work_dir = Path(tempfile.mkdtemp(prefix="transcript_local_"))
+    try:
+        suffix = Path(file.filename or "upload").suffix or ".mp4"
+        upload_path = work_dir / f"upload{suffix}"
+
+        size = 0
+        with open(upload_path, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large -- {MAX_UPLOAD_BYTES // (1024 * 1024)}MB max.",
+                    )
+                out.write(chunk)
+
+        audio_path = _extract_audio_from_upload(upload_path, work_dir)
+        result = _transcribe_with_whisper(audio_path, whisper_model)
+        result["platform"] = "local"
+        result["title"] = file.filename
+        return result
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
