@@ -127,7 +127,7 @@ export default function ToolkitApp() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || data.detail || "Failed to fetch metadata");
       setMetadata(data);
-      if (data.duration) setEndInput(formatDuration(Math.min(30, Math.floor(data.duration)));
+      if (data.duration) setEndInput(formatDuration(Math.min(30, Math.floor(data.duration))));
       const plat = data.platform ? ` · ${data.platform}` : "";
       setStatus(`Loaded: ${data.title}${plat}`);
       setMode("download");
@@ -153,8 +153,8 @@ export default function ToolkitApp() {
         throw new Error(data.error || data.detail || "Video download failed");
       }
       const blob = await res.blob();
-      const quality = res.headers.get("X-Video-Quality");
-      const qualityTag = quality ? ` (${quality})` : "";
+      const qualityLabel = res.headers.get("X-Video-Quality");
+      const qualityTag = qualityLabel ? ` (${qualityLabel})` : "";
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = downloadUrl;
@@ -200,8 +200,8 @@ export default function ToolkitApp() {
         throw new Error(data.error || data.detail || "Clip extraction failed");
       }
       const blob = await res.blob();
-      const qualityHdr = res.headers.get("X-Video-Quality");
-      const qualityTag = qualityHdr ? ` (${qualityHdr})` : "";
+      const qualityLabel = res.headers.get("X-Video-Quality");
+      const qualityTag = qualityLabel ? ` (${qualityLabel})` : "";
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = downloadUrl;
