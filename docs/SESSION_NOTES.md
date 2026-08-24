@@ -10,6 +10,30 @@ Related:
 
 ---
 
+## Documentation rule (standing)
+
+**Every code or behavior change must be documented in this file in the same session as the push.**
+
+Applies to Grok, Claude, and anyone else touching the repo.
+
+| Change type | What to write |
+|-------------|---------------|
+| Bug fix | New **T#** test-log entry: where, symptom, cause, fix, verify, files |
+| Behavior change (yt-dlp, formats, clients, timeouts) | Update **Current backend strategy** + test log if needed |
+| New wiring (API route, UI↔backend) | Update **Frontend ↔ backend wiring** |
+| Ops / run commands | Update **Local testing** or recovery checklist |
+| Scope / priority shift | Update **Current focus** |
+
+Also:
+- Bump **Last updated** date
+- Add a row to **Quick recovery checklist** when the symptom is user-visible
+- Mention the fix under **Fixed in session** when relevant
+- Do **not** ship code-only commits for behavioral changes without a docs update
+
+Handoff: if you only pushed code, the next agent should treat missing docs as incomplete work.
+
+---
+
 ## What “done” looks like for product
 
 - **Pass-through toolkit:** server fetches/processes briefly; user downloads to their device. **Not** a permanent media host.
@@ -353,6 +377,7 @@ uvicorn app.main:app --reload --port 8000
 ## AI handoff prompt (copy-paste)
 
 > Read `docs/SESSION_NOTES.md` and `docs/REVIEW_AND_ROADMAP.md`.  
+> **Documentation rule:** every code/behavior change must update SESSION_NOTES in the same session (test log T#, strategy, recovery checklist as needed).  
 > Pay attention to **Test log / errors seen** before changing yt-dlp options.  
 > YouTube: quality cascade (HQ DASH → progressive on 403); **also cascade when ffprobe finds no audio (T11)**; clients android+web.  
 > Local output: respect `LOCAL_OUTPUT_DIR`.  
