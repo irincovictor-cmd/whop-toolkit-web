@@ -6,6 +6,10 @@ PO-token experiments, while progressive muxed formats still work.
 
 Strategy: callers should try FORMAT_VIDEO_HQ first, then FORMAT_VIDEO_SAFE.
 Clients: android+web matched successful local downloads on this project.
+
+After a "successful" download we also ffprobe for an audio stream. yt-dlp can
+exit 0 with video-only output when DASH merge is incomplete — that produced
+silent full-video downloads while section clips (remuxed) still had sound.
 """
 
 import json
@@ -19,23 +23,16 @@ BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-YOUTUBE_PLAYER_CLIENTS = ["default", "android"]
+# android,web matched progressive success in session notes; default can surface VR/SABR paths
+YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
 
-# Attempt first: real 720/1080 when YouTube allows DASH.
-# NOTE: deliberately NOT falling through to an unrestricted "/best" here.
-# yt-dlp evaluates format selectors internally -- an unbounded trailing
-# fallback lets it silently pick any available format (even very low res)
-# while still exiting 0, which meant our own cascade below never even
-# triggered because it only sees the low quality as a "success." Keeping
-# both alternatives height-capped forces a real failure when 1080 truly
-# isn't available, so run_with_format_cascade() actually gets a chance to
-# retry with FORMAT_VIDEO_SAFE instead of yt-dlp quietly downgrading first.
-# Confirmed via side-by-side comparison against the CLI tool, which never
-# had this trailing fallback and consistently got higher quality.
-FORMAT_VIDEO_HQ = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
-# Fallback: progressive / SABR-safe (often ~360p–720p, but completes).
+# Attempt first: real 720/1080 when YouTube allows DASH + audio merge.
+FORMAT_VIDEO_HQ = (
+    "bestvideo[height<=1080]+bestaudio/best[height<=1080][ext=mp4]/best[height<=1080]"
+)
+# Fallback: progressive / SABR-safe (often muxed mp4 with audio).
 FORMAT_VIDEO_SAFE = (
-    "best[height<=720][ext=mp4]/best[height<=480]/best[protocol^=http]/best"
+    "best[height<=720][ext=mp4]/best[height<=720]/best[height<=480][ext=mp4]/best"
 )
 FORMAT_AUDIO = "bestaudio/best"
 
@@ -92,8 +89,7 @@ def format_selector(url: str, want_audio_only: bool = False) -> str:
 
 def base_cli_flags(url: str) -> list[str]:
     """UA / referer / cookies / extractor-args flags shared by every yt-dlp
-    subprocess call. Callers append these to their route-specific flags,
-    then the target URL last."""
+    subprocess call."""
     options = build_ydl_options(url)
     flags: list[str] = ["--user-agent", options["http_headers"]["User-Agent"]]
 
@@ -113,9 +109,7 @@ def base_cli_flags(url: str) -> list[str]:
 
 
 def looks_like_youtube_block(stderr: str) -> bool:
-    """True if stderr matches the SABR/PO-token/DRM-style failures documented
-    in docs/SESSION_NOTES.md (Test log T2/T3/T5) that warrant cascading to
-    the next, safer format rather than failing outright."""
+    """True if stderr matches SABR/PO-token/DRM-style failures that warrant cascade."""
     s = (stderr or "").lower()
     return any(
         token in s
@@ -124,12 +118,7 @@ def looks_like_youtube_block(stderr: str) -> bool:
 
 
 def probe_video_quality(path: Path) -> str | None:
-    """Returns the actual achieved resolution as e.g. '1080p', by reading
-    the real video stream height with ffprobe -- not what we *asked*
-    yt-dlp for, what it actually delivered. This is what lets a filename
-    honestly say "(720p)" when the safe-format cascade fired, instead of
-    the user only finding out by eyeballing playback quality. Returns None
-    for audio-only files (no video stream) or if ffprobe fails."""
+    """Returns actual resolution e.g. '1080p' via ffprobe, or None."""
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=height",
@@ -146,37 +135,70 @@ def probe_video_quality(path: Path) -> str | None:
         return None
 
 
+def probe_has_audio(path: Path) -> bool:
+    """True if ffprobe finds at least one audio stream."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=codec_type",
+        "-of", "csv=p=0", str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return False
+        return "audio" in (result.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _first_output_file(work_dir: Path, output_id: str) -> Path | None:
+    matches = sorted(work_dir.glob(f"{output_id}.*"))
+    return matches[0] if matches else None
+
+
 def run_with_format_cascade(
     build_cmd,
     url: str,
     work_dir: Path,
     output_id: str,
     want_audio_only: bool = False,
-    timeout: int = 300,
+    timeout: int = 600,
 ) -> tuple[subprocess.CompletedProcess, str]:
     """Run yt-dlp, trying format_attempts(url) in order.
 
-    `build_cmd(fmt)` must return the full argv list for that format attempt
-    (route-specific flags + base_cli_flags(url) + [url]).
+    On YouTube-style block (403/SABR), clear partials and try the next format.
+    On exit 0 with a video file that has **no audio** (and caller wanted video),
+    treat as failure and cascade — fixes silent full-video downloads.
 
-    On a YouTube-style block (see looks_like_youtube_block), partial output
-    for this attempt is cleared and the next, safer format is tried -- this
-    is the HQ-DASH-then-progressive cascade from docs/SESSION_NOTES.md.
-    Any other kind of failure raises immediately without cascading.
-
-    Returns (CompletedProcess, format_used) on success. Raises RuntimeError
-    with the last stderr/stdout on exhausting all attempts.
+    Returns (CompletedProcess, format_used) on success.
     """
     attempts = format_attempts(url, want_audio_only=want_audio_only)
     last_err = "unknown yt-dlp error"
 
     for i, fmt in enumerate(attempts):
         result = subprocess.run(build_cmd(fmt), capture_output=True, text=True, timeout=timeout)
+        is_last_attempt = i + 1 == len(attempts)
+
         if result.returncode == 0:
-            return result, fmt
+            out = _first_output_file(work_dir, output_id)
+            if want_audio_only or out is None:
+                return result, fmt
+            if probe_has_audio(out):
+                return result, fmt
+
+            last_err = (
+                f"download produced a file without audio (format={fmt}); "
+                "retrying safer format"
+            )
+            for p in work_dir.glob(f"{output_id}*"):
+                p.unlink(missing_ok=True)
+            if is_last_attempt:
+                raise RuntimeError(
+                    last_err + " — all format attempts lacked an audio track"
+                )
+            continue
 
         last_err = result.stderr or result.stdout or last_err
-        is_last_attempt = i + 1 == len(attempts)
         if not is_last_attempt and looks_like_youtube_block(last_err):
             for p in work_dir.glob(f"{output_id}*"):
                 p.unlink(missing_ok=True)
