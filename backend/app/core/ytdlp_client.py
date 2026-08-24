@@ -1,15 +1,17 @@
 """
 Shared yt-dlp configuration.
 
-YouTube (2025–2026) often 403s high DASH (bestvideo+bestaudio) under SABR /
-PO-token experiments, while progressive muxed formats still work.
+YouTube (2025–2026) often 403s high DASH under SABR / PO-token experiments,
+while progressive muxed formats still work.
 
-Strategy: callers should try FORMAT_VIDEO_HQ first, then FORMAT_VIDEO_SAFE.
-Clients: android+web matched successful local downloads on this project.
+Cascade order (YouTube):
+  1) DASH merge up to 1080p  (bestvideo+bestaudio only — no progressive fallback
+     inside the same -f string, or yt-dlp accepts format 18 / 360p as "success")
+  2) DASH merge up to 720p
+  3) Progressive / SABR-safe (prefer highest available mp4, then any best)
 
-After a "successful" download we also ffprobe for an audio stream. yt-dlp can
-exit 0 with video-only output when DASH merge is incomplete — that produced
-silent full-video downloads while section clips (remuxed) still had sound.
+After exit 0, ffprobe requires an audio stream for video downloads (T11).
+Clients: android+web (session notes T6).
 """
 
 import json
@@ -23,16 +25,15 @@ BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-# android,web matched progressive success in session notes; default can surface VR/SABR paths
 YOUTUBE_PLAYER_CLIENTS = ["android", "web"]
 
-# Attempt first: real 720/1080 when YouTube allows DASH + audio merge.
-FORMAT_VIDEO_HQ = (
-    "bestvideo[height<=1080]+bestaudio/best[height<=1080][ext=mp4]/best[height<=1080]"
-)
-# Fallback: progressive / SABR-safe (often muxed mp4 with audio).
+# DASH only — do NOT append /best[height<=1080] here or progressive 360p wins the attempt
+FORMAT_VIDEO_HQ = "bestvideo[height<=1080]+bestaudio"
+FORMAT_VIDEO_MID = "bestvideo[height<=720]+bestaudio"
+# Prefer taller progressive mp4 before unrestricted best (avoids jumping straight to 360p)
 FORMAT_VIDEO_SAFE = (
-    "best[height<=720][ext=mp4]/best[height<=720]/best[height<=480][ext=mp4]/best"
+    "best[height<=1080][ext=mp4]/best[height<=720][ext=mp4]/"
+    "best[height<=480][ext=mp4]/best[ext=mp4]/best"
 )
 FORMAT_AUDIO = "bestaudio/best"
 
@@ -74,22 +75,19 @@ def build_ydl_options(url: str, **extra) -> dict:
 
 
 def format_attempts(url: str, want_audio_only: bool = False) -> list[str]:
-    """Ordered format strings to try until one succeeds."""
+    """Ordered format strings to try until one succeeds with audio (for video)."""
     if want_audio_only:
         return [FORMAT_AUDIO]
     if detect_platform(url) == "youtube":
-        return [FORMAT_VIDEO_HQ, FORMAT_VIDEO_SAFE]
-    return ["bestvideo[height<=1080]+bestaudio/best", "best"]
+        return [FORMAT_VIDEO_HQ, FORMAT_VIDEO_MID, FORMAT_VIDEO_SAFE]
+    return ["bestvideo[height<=1080]+bestaudio", "bestvideo[height<=720]+bestaudio", "best"]
 
 
 def format_selector(url: str, want_audio_only: bool = False) -> str:
-    """Single format string (first preference). Prefer format_attempts for resilience."""
     return format_attempts(url, want_audio_only)[0]
 
 
 def base_cli_flags(url: str) -> list[str]:
-    """UA / referer / cookies / extractor-args flags shared by every yt-dlp
-    subprocess call."""
     options = build_ydl_options(url)
     flags: list[str] = ["--user-agent", options["http_headers"]["User-Agent"]]
 
@@ -109,16 +107,23 @@ def base_cli_flags(url: str) -> list[str]:
 
 
 def looks_like_youtube_block(stderr: str) -> bool:
-    """True if stderr matches SABR/PO-token/DRM-style failures that warrant cascade."""
     s = (stderr or "").lower()
     return any(
         token in s
-        for token in ("403", "forbidden", "sabr", "po token", "drm protected", "http error 403")
+        for token in (
+            "403",
+            "forbidden",
+            "sabr",
+            "po token",
+            "drm protected",
+            "http error 403",
+            "requested format is not available",
+            "only images are available",
+        )
     )
 
 
 def probe_video_quality(path: Path) -> str | None:
-    """Returns actual resolution e.g. '1080p' via ffprobe, or None."""
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=height",
@@ -136,7 +141,6 @@ def probe_video_quality(path: Path) -> str | None:
 
 
 def probe_has_audio(path: Path) -> bool:
-    """True if ffprobe finds at least one audio stream."""
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
         "-show_entries", "stream=codec_type",
@@ -164,14 +168,7 @@ def run_with_format_cascade(
     want_audio_only: bool = False,
     timeout: int = 600,
 ) -> tuple[subprocess.CompletedProcess, str]:
-    """Run yt-dlp, trying format_attempts(url) in order.
-
-    On YouTube-style block (403/SABR), clear partials and try the next format.
-    On exit 0 with a video file that has **no audio** (and caller wanted video),
-    treat as failure and cascade — fixes silent full-video downloads.
-
-    Returns (CompletedProcess, format_used) on success.
-    """
+    """Try format_attempts in order. Cascade on 403/SABR or silent (no-audio) video."""
     attempts = format_attempts(url, want_audio_only=want_audio_only)
     last_err = "unknown yt-dlp error"
 
@@ -188,7 +185,7 @@ def run_with_format_cascade(
 
             last_err = (
                 f"download produced a file without audio (format={fmt}); "
-                "retrying safer format"
+                "retrying next format"
             )
             for p in work_dir.glob(f"{output_id}*"):
                 p.unlink(missing_ok=True)
@@ -200,6 +197,14 @@ def run_with_format_cascade(
 
         last_err = result.stderr or result.stdout or last_err
         if not is_last_attempt and looks_like_youtube_block(last_err):
+            for p in work_dir.glob(f"{output_id}*"):
+                p.unlink(missing_ok=True)
+            continue
+        # Format not available should also cascade, not hard-fail mid-list
+        if not is_last_attempt and (
+            "requested format is not available" in (last_err or "").lower()
+            or "format is not available" in (last_err or "").lower()
+        ):
             for p in work_dir.glob(f"{output_id}*"):
                 p.unlink(missing_ok=True)
             continue
